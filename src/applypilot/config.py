@@ -30,6 +30,58 @@ PACKAGE_DIR = Path(__file__).parent
 CONFIG_DIR = PACKAGE_DIR / "config"
 
 
+# Supported auto-apply agent CLIs (priority order)
+AUTO_APPLY_CLI_ORDER: tuple[str, ...] = ("opencode", "claude")
+AUTO_APPLY_CLI_INFO: dict[str, tuple[str, str]] = {
+    "opencode": ("OpenCode CLI", "https://opencode.ai/docs/"),
+    "claude": ("Claude Code CLI", "https://claude.ai/code"),
+}
+
+
+def _auto_apply_cli_order() -> list[str]:
+    """Resolve CLI preference order, honoring APPLYPILOT_AGENT_CLI override."""
+    override = os.environ.get("APPLYPILOT_AGENT_CLI", "").strip().lower()
+    order = list(AUTO_APPLY_CLI_ORDER)
+    if override in AUTO_APPLY_CLI_INFO and override in order:
+        order.remove(override)
+        order.insert(0, override)
+    return order
+
+
+def detect_auto_apply_cli() -> tuple[str, str] | None:
+    """Find the preferred installed agent CLI for auto-apply.
+
+    Returns:
+        (cli_name, absolute_path) if found, else None.
+    """
+    for cli_name in _auto_apply_cli_order():
+        cli_path = shutil.which(cli_name)
+        if cli_path:
+            return cli_name, cli_path
+    return None
+
+
+def get_auto_apply_cli_name() -> str:
+    """Get the selected CLI command name, raising if none is installed."""
+    found = detect_auto_apply_cli()
+    if not found:
+        raise FileNotFoundError(auto_apply_cli_requirement_text())
+    return found[0]
+
+
+def auto_apply_cli_label(cli_name: str) -> str:
+    """Human-readable label for a CLI command name."""
+    return AUTO_APPLY_CLI_INFO.get(cli_name, (cli_name, ""))[0]
+
+
+def auto_apply_cli_requirement_text() -> str:
+    """Install guidance shown when no supported agent CLI is available."""
+    return (
+        "OpenCode CLI (preferred) — install from [bold]https://opencode.ai/docs/[/bold] "
+        "or Claude Code CLI — install from [bold]https://claude.ai/code[/bold]"
+    )
+
+
 def get_chrome_path() -> str:
     """Auto-detect Chrome/Chromium executable path, cross-platform.
 
@@ -202,7 +254,7 @@ def get_tier() -> int:
 
     Tier 1 (Discovery):            Python + pip
     Tier 2 (AI Scoring & Tailoring): + LLM API key
-    Tier 3 (Full Auto-Apply):       + Claude Code CLI + Chrome
+    Tier 3 (Full Auto-Apply):       + OpenCode/Claude CLI + Chrome
     """
     load_env()
 
@@ -210,14 +262,14 @@ def get_tier() -> int:
     if not has_llm:
         return 1
 
-    has_claude = shutil.which("claude") is not None
+    has_agent_cli = detect_auto_apply_cli() is not None
     try:
         get_chrome_path()
         has_chrome = True
     except FileNotFoundError:
         has_chrome = False
 
-    if has_claude and has_chrome:
+    if has_agent_cli and has_chrome:
         return 3
 
     return 2
@@ -241,8 +293,8 @@ def check_tier(required: int, feature: str) -> None:
     if required >= 2 and not any(os.environ.get(k) for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL")):
         missing.append("LLM API key — run [bold]applypilot init[/bold] or set GEMINI_API_KEY")
     if required >= 3:
-        if not shutil.which("claude"):
-            missing.append("Claude Code CLI — install from [bold]https://claude.ai/code[/bold]")
+        if detect_auto_apply_cli() is None:
+            missing.append(auto_apply_cli_requirement_text())
         try:
             get_chrome_path()
         except FileNotFoundError:

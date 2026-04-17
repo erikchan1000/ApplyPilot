@@ -97,7 +97,24 @@ def _kill_on_port(port: int) -> None:
 # Worker profile management
 # ---------------------------------------------------------------------------
 
-def setup_worker_profile(worker_id: int) -> Path:
+def _pick_profile_name(profile_root: Path, requested: str) -> str:
+    """Select a usable Chrome profile directory name."""
+    if (profile_root / requested).exists():
+        return requested
+    if (profile_root / "Default").exists():
+        logger.warning("Chrome profile '%s' not found, falling back to 'Default'", requested)
+        return "Default"
+    for p in profile_root.iterdir():
+        if p.is_dir() and (p.name == "Default" or p.name.startswith("Profile")):
+            logger.warning("Chrome profile '%s' not found, using '%s'", requested, p.name)
+            return p.name
+    raise FileNotFoundError(
+        f"No usable Chrome profile found in {profile_root}. "
+        "Open Chrome once, sign in, then retry."
+    )
+
+
+def setup_worker_profile(worker_id: int, chrome_profile: str = "Default") -> tuple[Path, str]:
     """Create an isolated Chrome profile for a worker.
 
     On first run, clones from an existing worker profile (preferred, since
@@ -108,11 +125,15 @@ def setup_worker_profile(worker_id: int) -> Path:
         worker_id: Numeric worker identifier.
 
     Returns:
-        Path to the worker's Chrome user-data directory.
+        Tuple of (worker user-data dir path, actual profile directory name).
     """
     profile_dir = config.CHROME_WORKER_DIR / f"worker-{worker_id}"
-    if (profile_dir / "Default").exists():
-        return profile_dir  # Already initialized
+    if profile_dir.exists():
+        try:
+            actual_profile = _pick_profile_name(profile_dir, chrome_profile)
+            return profile_dir, actual_profile  # Already initialized
+        except FileNotFoundError:
+            pass
 
     # Find a source: prefer existing worker (has session cookies), else user profile
     source: Path | None = None
@@ -125,6 +146,12 @@ def setup_worker_profile(worker_id: int) -> Path:
             break
     if source is None:
         source = config.get_chrome_user_data()
+
+    if not source.exists():
+        raise FileNotFoundError(
+            f"Chrome user data directory not found: {source}. "
+            "Open Chrome once and sign in, then retry."
+        )
 
     logger.info("[worker-%d] Copying Chrome profile from %s (first time setup)...",
                 worker_id, source.name)
@@ -156,16 +183,24 @@ def setup_worker_profile(worker_id: int) -> Path:
         except (PermissionError, OSError):
             pass  # skip locked files
 
-    return profile_dir
+    actual_profile = _pick_profile_name(profile_dir, chrome_profile)
+    return profile_dir, actual_profile
 
 
-def _suppress_restore_nag(profile_dir: Path) -> None:
+def reset_worker_profile(worker_id: int) -> None:
+    """Delete worker Chrome profile so it can be re-cloned."""
+    profile_dir = config.CHROME_WORKER_DIR / f"worker-{worker_id}"
+    if profile_dir.exists():
+        shutil.rmtree(str(profile_dir), ignore_errors=True)
+
+
+def _suppress_restore_nag(profile_dir: Path, chrome_profile: str = "Default") -> None:
     """Clear Chrome's 'restore pages' nag by fixing Preferences.
 
     Chrome writes exit_type=Crashed when killed, which triggers a
     'Restore pages?' prompt on next launch. This patches it out.
     """
-    prefs_file = profile_dir / "Default" / "Preferences"
+    prefs_file = profile_dir / chrome_profile / "Preferences"
     if not prefs_file.exists():
         return
 
@@ -187,7 +222,8 @@ def _suppress_restore_nag(profile_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def launch_chrome(worker_id: int, port: int | None = None,
-                  headless: bool = False) -> subprocess.Popen:
+                  headless: bool = False,
+                  chrome_profile: str = "Default") -> subprocess.Popen:
     """Launch a Chrome instance with remote debugging for a worker.
 
     Args:
@@ -201,13 +237,13 @@ def launch_chrome(worker_id: int, port: int | None = None,
     if port is None:
         port = BASE_CDP_PORT + worker_id
 
-    profile_dir = setup_worker_profile(worker_id)
+    profile_dir, actual_profile = setup_worker_profile(worker_id, chrome_profile=chrome_profile)
 
     # Kill any zombie Chrome from a previous run on this port
     _kill_on_port(port)
 
     # Patch preferences to suppress restore nag
-    _suppress_restore_nag(profile_dir)
+    _suppress_restore_nag(profile_dir, chrome_profile=actual_profile)
 
     chrome_exe = config.get_chrome_path()
 
@@ -215,7 +251,7 @@ def launch_chrome(worker_id: int, port: int | None = None,
         chrome_exe,
         f"--remote-debugging-port={port}",
         f"--user-data-dir={profile_dir}",
-        "--profile-directory=Default",
+        f"--profile-directory={actual_profile}",
         "--no-first-run",
         "--no-default-browser-check",
         "--window-size=1024,768",

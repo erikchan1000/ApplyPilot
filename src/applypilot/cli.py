@@ -147,10 +147,25 @@ def apply(
     limit: Optional[int] = typer.Option(None, "--limit", "-l", help="Max applications to submit."),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel browser workers."),
     min_score: int = typer.Option(7, "--min-score", help="Minimum fit score for job selection."),
-    model: str = typer.Option("haiku", "--model", "-m", help="Claude model name."),
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model name (for OpenCode use provider/model). Omit to use the agent CLI default.",
+    ),
     continuous: bool = typer.Option(False, "--continuous", "-c", help="Run forever, polling for new jobs."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without submitting."),
     headless: bool = typer.Option(False, "--headless", help="Run browsers in headless mode."),
+    chrome_profile: str = typer.Option(
+        "Default",
+        "--chrome-profile",
+        help="Chrome profile directory name to use for cookies/logins (Default, Profile 1, etc.).",
+    ),
+    refresh_chrome_profile: bool = typer.Option(
+        False,
+        "--refresh-chrome-profile",
+        help="Re-copy local Chrome profile before run so latest cookies/logins are available.",
+    ),
     url: Optional[str] = typer.Option(None, "--url", help="Apply to a specific job URL."),
     gen: bool = typer.Option(False, "--gen", help="Generate prompt file for manual debugging instead of running."),
     mark_applied: Optional[str] = typer.Option(None, "--mark-applied", help="Manually mark a job URL as applied."),
@@ -161,10 +176,15 @@ def apply(
     """Launch auto-apply to submit job applications."""
     _bootstrap()
 
-    from applypilot.config import check_tier, PROFILE_PATH as _profile_path
+    from applypilot.config import (
+        check_tier,
+        PROFILE_PATH as _profile_path,
+        detect_auto_apply_cli,
+        auto_apply_cli_label,
+    )
     from applypilot.database import get_connection
 
-    # --- Utility modes (no Chrome/Claude needed) ---
+    # --- Utility modes (no Chrome/agent CLI needed) ---
 
     if mark_applied:
         from applypilot.apply.launcher import mark_job
@@ -186,8 +206,21 @@ def apply(
 
     # --- Full apply mode ---
 
-    # Check 1: Tier 3 required (Claude Code CLI + Chrome)
+    # Check 1: Tier 3 required (OpenCode/Claude CLI + Chrome)
     check_tier(3, "auto-apply")
+
+    agent_info = detect_auto_apply_cli()
+    agent_cli = agent_info[0] if agent_info else "claude"
+    agent_label = auto_apply_cli_label(agent_cli)
+
+    effective_model = model
+    if agent_cli == "opencode" and effective_model and "/" not in effective_model:
+        console.print(
+            f"[yellow]Ignoring --model '{effective_model}' for OpenCode.[/yellow] "
+            "Use provider/model (example: anthropic/claude-sonnet-4-5), "
+            "or omit --model to use your OpenCode default."
+        )
+        effective_model = None
 
     # Check 2: Profile exists
     if not _profile_path.exists():
@@ -211,23 +244,32 @@ def apply(
             raise typer.Exit(code=1)
 
     if gen:
-        from applypilot.apply.launcher import gen_prompt, BASE_CDP_PORT
+        from applypilot.apply.launcher import gen_prompt
         target = url or ""
         if not target:
             console.print("[red]--gen requires --url to specify which job.[/red]")
             raise typer.Exit(code=1)
-        prompt_file = gen_prompt(target, min_score=min_score, model=model)
+        prompt_file = gen_prompt(target, min_score=min_score, model=effective_model)
         if not prompt_file:
             console.print("[red]No matching job found for that URL.[/red]")
             raise typer.Exit(code=1)
         mcp_path = _profile_path.parent / ".mcp-apply-0.json"
+        opencode_path = _profile_path.parent / ".opencode-apply-0.json"
         console.print(f"[green]Wrote prompt to:[/green] {prompt_file}")
         console.print(f"\n[bold]Run manually:[/bold]")
-        console.print(
-            f"  claude --model {model} -p "
-            f"--mcp-config {mcp_path} "
-            f"--permission-mode bypassPermissions < {prompt_file}"
-        )
+        if agent_cli == "opencode":
+            model_arg = f" --model {effective_model}" if effective_model else ""
+            console.print(
+                f"  OPENCODE_CONFIG=\"{opencode_path}\" opencode run --format json"
+                f" --dangerously-skip-permissions{model_arg} < \"{prompt_file}\""
+            )
+        else:
+            selected_model = effective_model or "haiku"
+            console.print(
+                f"  claude --model {selected_model} -p "
+                f"--mcp-config \"{mcp_path}\" "
+                f"--permission-mode bypassPermissions < \"{prompt_file}\""
+            )
         return
 
     from applypilot.apply.launcher import main as apply_main
@@ -237,8 +279,12 @@ def apply(
     console.print("\n[bold blue]Launching Auto-Apply[/bold blue]")
     console.print(f"  Limit:    {'unlimited' if continuous else effective_limit}")
     console.print(f"  Workers:  {workers}")
-    console.print(f"  Model:    {model}")
+    model_display = effective_model or ("haiku (default)" if agent_cli == "claude" else "agent default")
+    console.print(f"  Agent:    {agent_label}")
+    console.print(f"  Model:    {model_display}")
     console.print(f"  Headless: {headless}")
+    console.print(f"  Chrome profile: {chrome_profile}")
+    console.print(f"  Refresh profile: {refresh_chrome_profile}")
     console.print(f"  Dry run:  {dry_run}")
     if url:
         console.print(f"  Target:   {url}")
@@ -249,10 +295,12 @@ def apply(
         target_url=url,
         min_score=min_score,
         headless=headless,
-        model=model,
+        model=effective_model,
         dry_run=dry_run,
         continuous=continuous,
         workers=workers,
+        chrome_profile=chrome_profile,
+        refresh_chrome_profile=refresh_chrome_profile,
     )
 
 
@@ -338,7 +386,8 @@ def doctor() -> None:
     import shutil
     from applypilot.config import (
         load_env, PROFILE_PATH, RESUME_PATH, RESUME_PDF_PATH,
-        SEARCH_CONFIG_PATH, ENV_PATH, get_chrome_path,
+        SEARCH_CONFIG_PATH, get_chrome_path,
+        detect_auto_apply_cli, auto_apply_cli_label,
     )
 
     load_env()
@@ -396,13 +445,24 @@ def doctor() -> None:
                         "Set GEMINI_API_KEY in ~/.applypilot/.env (run 'applypilot init')"))
 
     # --- Tier 3 checks ---
-    # Claude Code CLI
+    # Agent CLI (OpenCode preferred, Claude supported)
+    selected_cli = detect_auto_apply_cli()
+    opencode_bin = shutil.which("opencode")
     claude_bin = shutil.which("claude")
-    if claude_bin:
-        results.append(("Claude Code CLI", ok_mark, claude_bin))
+    if selected_cli:
+        cli_name, cli_path = selected_cli
+        label = auto_apply_cli_label(cli_name)
+        results.append(("Agent CLI", ok_mark, f"{label} ({cli_name}) at {cli_path}"))
     else:
-        results.append(("Claude Code CLI", fail_mark,
-                        "Install from https://claude.ai/code (needed for auto-apply)"))
+        results.append((
+            "Agent CLI",
+            fail_mark,
+            "Install OpenCode (https://opencode.ai/docs/) or Claude Code (https://claude.ai/code)",
+        ))
+    if opencode_bin and (not selected_cli or selected_cli[0] != "opencode"):
+        results.append(("OpenCode CLI", ok_mark, opencode_bin))
+    if claude_bin and (not selected_cli or selected_cli[0] != "claude"):
+        results.append(("Claude Code CLI", ok_mark, claude_bin))
 
     # Chrome
     try:
@@ -446,9 +506,9 @@ def doctor() -> None:
 
     if tier == 1:
         console.print("[dim]  → Tier 2 unlocks: scoring, tailoring, cover letters (needs LLM API key)[/dim]")
-        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Claude Code CLI + Chrome + Node.js)[/dim]")
+        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs OpenCode/Claude CLI + Chrome + Node.js)[/dim]")
     elif tier == 2:
-        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs Claude Code CLI + Chrome + Node.js)[/dim]")
+        console.print("[dim]  → Tier 3 unlocks: auto-apply (needs OpenCode/Claude CLI + Chrome + Node.js)[/dim]")
 
     console.print()
 

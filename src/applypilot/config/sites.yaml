@@ -52,6 +52,7 @@ base_urls:
   "Himalayas": "https://himalayas.app"
   "Techstars Jobs": "https://www.techstars.com"
   "Randstad Canada": "https://www.randstad.ca/jobs/search/"
+  "Simplify": "https://simplify.jobs"
 
 sites:
   # ── Searchable sites (URL includes query + location params) ──────────
@@ -99,6 +100,10 @@ sites:
 
   - name: "WelcomeToTheJungle"
     url: "https://www.welcometothejungle.com/en/jobs?query={query_encoded}&refinementList%5Bremote%5D%5B%5D=fulltime"
+    type: search
+
+  - name: "Simplify"
+    url: "https://simplify.jobs/jobs?state={location_encoded}&category={query_encoded}&workArrangement=Remote%3BHybrid%3BIn%20Person"
     type: search
 
   # ── Static sites (no query params, scraped once) ─────────────────────

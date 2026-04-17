@@ -25,6 +25,8 @@ from applypilot.config import (
     RESUME_PATH,
     RESUME_PDF_PATH,
     SEARCH_CONFIG_PATH,
+    detect_auto_apply_cli,
+    auto_apply_cli_label,
     ensure_dirs,
 )
 
@@ -280,25 +282,28 @@ def _setup_ai_features() -> None:
 # ---------------------------------------------------------------------------
 
 def _setup_auto_apply() -> None:
-    """Configure autonomous job application (requires Claude Code CLI)."""
+    """Configure autonomous job application (requires OpenCode or Claude CLI)."""
     console.print(Panel(
         "[bold]Step 5: Auto-Apply (optional)[/bold]\n"
         "ApplyPilot can autonomously fill and submit job applications\n"
-        "using Claude Code as the browser agent."
+        "using OpenCode or Claude Code as the browser agent."
     ))
 
     if not Confirm.ask("Enable autonomous job applications?", default=True):
         console.print("[dim]You can apply manually using the tailored resumes ApplyPilot generates.[/dim]")
         return
 
-    # Check for Claude Code CLI
-    if shutil.which("claude"):
-        console.print("[green]Claude Code CLI detected.[/green]")
+    # Check for supported agent CLI
+    selected_cli = detect_auto_apply_cli()
+    if selected_cli:
+        cli_name, _cli_path = selected_cli
+        console.print(f"[green]{auto_apply_cli_label(cli_name)} detected.[/green]")
     else:
         console.print(
-            "[yellow]Claude Code CLI not found on PATH.[/yellow]\n"
-            "Install it from: [bold]https://claude.ai/code[/bold]\n"
-            "Auto-apply won't work until Claude Code is installed."
+            "[yellow]No supported agent CLI found on PATH.[/yellow]\n"
+            "Install OpenCode ([bold]https://opencode.ai/docs/[/bold]) or "
+            "Claude Code ([bold]https://claude.ai/code[/bold]).\n"
+            "Auto-apply won't work until one is installed."
         )
 
     # Optional: CapSolver for CAPTCHAs
@@ -356,7 +361,7 @@ def run_wizard() -> None:
     _setup_ai_features()
     console.print()
 
-    # Step 5: Auto-apply (Claude Code detection)
+    # Step 5: Auto-apply (agent CLI detection)
     _setup_auto_apply()
     console.print()
 
@@ -380,7 +385,7 @@ def run_wizard() -> None:
     if tier == 1:
         unlock_hint = "\n[dim]To unlock Tier 2: configure an LLM API key (re-run [bold]applypilot init[/bold]).[/dim]"
     elif tier == 2:
-        unlock_hint = "\n[dim]To unlock Tier 3: install Claude Code CLI + Chrome.[/dim]"
+        unlock_hint = "\n[dim]To unlock Tier 3: install OpenCode/Claude CLI + Chrome.[/dim]"
 
     console.print(
         Panel.fit(
