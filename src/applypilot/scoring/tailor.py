@@ -30,6 +30,7 @@ from applypilot.scoring.validator import (
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5  # max cross-run retries before giving up
+TAILOR_MAX_TOKENS = 8192
 
 
 # ── Prompt Builders (profile-driven) ──────────────────────────────────────
@@ -218,6 +219,19 @@ def extract_json(raw: str) -> dict:
     raise ValueError("No valid JSON found in LLM response")
 
 
+def _summarize_parse_failure(raw: str, err: Exception) -> dict:
+    """Capture parse-failure diagnostics for retry reports."""
+    stripped = raw.strip()
+    likely_truncated = bool(stripped) and stripped.startswith("{") and not stripped.endswith("}")
+    return {
+        "error": str(err),
+        "raw_length": len(raw),
+        "likely_truncated": likely_truncated,
+        "raw_head": raw[:240],
+        "raw_tail": raw[-240:],
+    }
+
+
 # ── Resume Assembly (profile-driven header) ──────────────────────────────
 
 def assemble_resume_text(data: dict, profile: dict) -> str:
@@ -379,6 +393,7 @@ def tailor_resume(
     report: dict = {
         "attempts": 0, "validator": None, "judge": None,
         "status": "pending", "validation_mode": validation_mode,
+        "parse_failures": [],
     }
     avoid_notes: list[str] = []
     tailored = ""
@@ -400,13 +415,29 @@ def tailor_resume(
             {"role": "user", "content": f"ORIGINAL RESUME:\n{resume_text}\n\n---\n\nTARGET JOB:\n{job_text}\n\nReturn the JSON:"},
         ]
 
-        raw = client.chat(messages, max_tokens=2048, temperature=0.4)
+        raw = client.chat(messages, max_tokens=TAILOR_MAX_TOKENS, temperature=0.2)
 
         # Parse JSON from response
         try:
             data = extract_json(raw)
-        except ValueError:
-            avoid_notes.append("Output was not valid JSON. Return ONLY a JSON object, nothing else.")
+        except ValueError as e:
+            details = _summarize_parse_failure(raw, e)
+            report["parse_failures"].append(details)
+            log.warning(
+                "Tailor JSON parse failed on attempt %d/%d for '%s' (len=%d, truncated=%s)",
+                attempt + 1,
+                max_retries + 1,
+                job.get("title", "")[:60],
+                details["raw_length"],
+                details["likely_truncated"],
+            )
+            avoid_notes.append("Output was not valid JSON. Return ONLY a single complete JSON object, no prose.")
+            if details["likely_truncated"]:
+                avoid_notes.append(
+                    "Previous output was cut off. Keep JSON concise and complete: max 3 bullets per experience entry, max 2 bullets per project."
+                )
+            else:
+                avoid_notes.append(f"Previous parse error: {details['error'][:120]}")
             continue
 
         # Layer 1: Validate JSON fields
@@ -449,6 +480,15 @@ def tailor_resume(
         report["status"] = "approved"
         return tailored, report
 
+    if report["validator"] is None and report["parse_failures"]:
+        report["validator"] = {
+            "passed": False,
+            "errors": [
+                f"JSON parse failed after {report['attempts']} attempts",
+                report["parse_failures"][-1]["error"],
+            ],
+            "warnings": [],
+        }
     report["status"] = "exhausted_retries"
     return tailored, report
 
@@ -482,7 +522,14 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     t0 = time.time()
     completed = 0
     results: list[dict] = []
-    stats: dict[str, int] = {"approved": 0, "failed_validation": 0, "failed_judge": 0, "error": 0}
+    stats: dict[str, int] = {
+        "approved": 0,
+        "approved_with_judge_warning": 0,
+        "failed_validation": 0,
+        "failed_judge": 0,
+        "exhausted_retries": 0,
+        "error": 0,
+    }
 
     for job in jobs:
         completed += 1
@@ -495,9 +542,15 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
             safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
             prefix = f"{safe_site}_{safe_title}"
 
-            # Save tailored resume text
+            # Save tailored resume text (skip empty outputs)
             txt_path = TAILORED_DIR / f"{prefix}.txt"
-            txt_path.write_text(tailored, encoding="utf-8")
+            if tailored.strip():
+                txt_path.write_text(tailored, encoding="utf-8")
+                txt_out_path: str | None = str(txt_path)
+            else:
+                txt_out_path = None
+                if txt_path.exists() and txt_path.stat().st_size == 0:
+                    txt_path.unlink(missing_ok=True)
 
             # Save job description for traceability
             job_path = TAILORED_DIR / f"{prefix}_JOB.txt"
@@ -518,7 +571,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
             # Generate PDF for approved resumes (best-effort)
             # "approved_with_judge_warning" is also a success — resume was generated.
             pdf_path = None
-            if report["status"] in ("approved", "approved_with_judge_warning"):
+            if report["status"] in ("approved", "approved_with_judge_warning") and txt_out_path:
                 try:
                     from applypilot.scoring.pdf import convert_to_pdf
                     pdf_path = str(convert_to_pdf(txt_path))
@@ -527,7 +580,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
 
             result = {
                 "url": job["url"],
-                "path": str(txt_path),
+                "path": txt_out_path,
                 "pdf_path": pdf_path,
                 "title": job["title"],
                 "site": job["site"],
@@ -559,7 +612,7 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     now = datetime.now(timezone.utc).isoformat()
     _success_statuses = {"approved", "approved_with_judge_warning"}
     for r in results:
-        if r["status"] in _success_statuses:
+        if r["status"] in _success_statuses and r.get("path"):
             conn.execute(
                 "UPDATE jobs SET tailored_resume_path=?, tailored_at=?, "
                 "tailor_attempts=COALESCE(tailor_attempts,0)+1 WHERE url=?",
@@ -573,18 +626,25 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     conn.commit()
 
     elapsed = time.time() - t0
+    approved_total = stats.get("approved", 0) + stats.get("approved_with_judge_warning", 0)
+    failed_total = (
+        stats.get("failed_validation", 0)
+        + stats.get("failed_judge", 0)
+        + stats.get("exhausted_retries", 0)
+    )
     log.info(
-        "Tailoring done in %.1fs: %d approved, %d failed_validation, %d failed_judge, %d errors",
+        "Tailoring done in %.1fs: %d approved, %d failed_validation, %d failed_judge, %d exhausted, %d errors",
         elapsed,
-        stats.get("approved", 0),
+        approved_total,
         stats.get("failed_validation", 0),
         stats.get("failed_judge", 0),
+        stats.get("exhausted_retries", 0),
         stats.get("error", 0),
     )
 
     return {
-        "approved": stats.get("approved", 0),
-        "failed": stats.get("failed_validation", 0) + stats.get("failed_judge", 0),
+        "approved": approved_total,
+        "failed": failed_total,
         "errors": stats.get("error", 0),
         "elapsed": elapsed,
     }
