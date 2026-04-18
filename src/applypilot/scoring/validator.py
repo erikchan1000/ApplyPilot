@@ -70,6 +70,9 @@ FABRICATION_WATCHLIST: set[str] = {
 
 REQUIRED_SECTIONS: set[str] = {"TECHNICAL SKILLS", "EXPERIENCE", "PROJECTS", "EDUCATION"}
 
+MAX_RESUME_BULLETS = 14
+MAX_RESUME_WORDS = 475
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -188,6 +191,22 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
                 errors.append(msg)
             else:  # normal
                 warnings.append(msg)
+
+    # 1-page guard: enforce bullet count and word budget
+    total_bullets = len(all_text_parts)
+    if total_bullets > MAX_RESUME_BULLETS:
+        errors.append(
+            f"Too many bullets ({total_bullets}). Max {MAX_RESUME_BULLETS} to fit 1 page. "
+            "Cut low-impact bullets."
+        )
+    total_words = len(all_text.split())
+    skills_words = sum(len(str(v).split()) for v in data.get("skills", {}).values())
+    content_words = total_words + skills_words
+    if content_words > MAX_RESUME_WORDS:
+        errors.append(
+            f"Resume too long ({content_words} words). Max {MAX_RESUME_WORDS} to fit 1 page. "
+            "Shorten bullets."
+        )
 
     return {"passed": len(errors) == 0, "errors": errors, "warnings": warnings}
 

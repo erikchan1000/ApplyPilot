@@ -119,6 +119,23 @@ def _describe_tool_action(tool_name: str, tool_input: dict) -> str:
 # Database operations
 # ---------------------------------------------------------------------------
 
+def _load_exclude_titles() -> list[str]:
+    """Load title exclusion patterns from search config for apply-time guard."""
+    try:
+        search_cfg = config.load_search_config()
+        return [t.lower() for t in search_cfg.get("exclude_titles", [])]
+    except Exception:
+        return []
+
+
+def _title_ok(title: str | None, exclude_patterns: list[str]) -> bool:
+    """Check if a job title passes the title exclusion filter."""
+    if not title or not exclude_patterns:
+        return True
+    title_lower = title.lower()
+    return not any(pat in title_lower for pat in exclude_patterns)
+
+
 def acquire_job(target_url: str | None = None, min_score: int = 7,
                 worker_id: int = 0) -> dict | None:
     """Atomically acquire the next job to apply to.
@@ -132,6 +149,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
         Job dict or None if the queue is empty.
     """
     conn = get_connection()
+    exclude_titles = _load_exclude_titles()
     try:
         conn.execute("BEGIN IMMEDIATE")
 
@@ -175,6 +193,16 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
 
         if not row:
             conn.rollback()
+            return None
+
+        # Safety net: skip jobs with excluded title patterns
+        if not _title_ok(row["title"], exclude_titles):
+            conn.execute(
+                "UPDATE jobs SET apply_status = 'skipped', apply_error = 'excluded title' WHERE url = ?",
+                (row["url"],),
+            )
+            conn.commit()
+            logger.info("Skipping excluded title: %s (%s)", row["title"], row["url"][:80])
             return None
 
         # Skip manual ATS sites (unsolvable CAPTCHAs)

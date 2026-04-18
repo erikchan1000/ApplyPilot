@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 # ── Scoring Prompt ────────────────────────────────────────────────────────
 
-SCORE_PROMPT = """You are a job fit evaluator. Given a candidate's resume and a job description, score how well the candidate fits the role.
+_SCORE_PROMPT_BASE = """You are a job fit evaluator. Given a candidate's resume and a job description, score how well the candidate fits the role.
 
 SCORING CRITERIA:
 - 9-10: Perfect match. Candidate has direct experience in nearly all required skills and qualifications.
@@ -34,11 +34,37 @@ IMPORTANT FACTORS:
 - Consider transferable experience (automation, scripting, API work)
 - Factor in the candidate's project experience
 - Be realistic about experience level vs. job requirements (years of experience, seniority)
-
+{seniority_clause}
 RESPOND IN EXACTLY THIS FORMAT (no other text):
 SCORE: [1-10]
 KEYWORDS: [comma-separated ATS keywords from the job description that match or could match the candidate]
 REASONING: [2-3 sentences explaining the score]"""
+
+_SENIORITY_CLAUSE = """
+SENIORITY FILTER (target: {seniority}, ~{yoe} years of experience):
+- Roles clearly above target seniority (e.g. Senior, Staff, Lead, Principal, Director, Architect) should score 3 or below.
+- Roles clearly below target seniority (e.g. Intern, Junior, Entry Level, Co-op) should score 3 or below.
+- Roles at the target seniority level or ambiguous titles (no explicit seniority prefix) should be scored normally on skills fit.
+"""
+
+
+def _build_score_prompt() -> str:
+    """Build the scoring system prompt, injecting seniority rules if configured."""
+    try:
+        profile = load_profile()
+    except FileNotFoundError:
+        profile = {}
+
+    experience = profile.get("experience", {})
+    seniority = experience.get("target_seniority", "")
+    yoe = experience.get("years_of_experience_total", "")
+
+    if seniority:
+        clause = _SENIORITY_CLAUSE.format(seniority=seniority, yoe=yoe or "?")
+    else:
+        clause = ""
+
+    return _SCORE_PROMPT_BASE.format(seniority_clause=clause)
 
 
 def _parse_score_response(response: str) -> dict:
@@ -88,7 +114,7 @@ def score_job(resume_text: str, job: dict) -> dict:
     )
 
     messages = [
-        {"role": "system", "content": SCORE_PROMPT},
+        {"role": "system", "content": _build_score_prompt()},
         {"role": "user", "content": f"RESUME:\n{resume_text}\n\n---\n\nJOB POSTING:\n{job_text}"},
     ]
 

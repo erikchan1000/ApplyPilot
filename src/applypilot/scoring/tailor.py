@@ -108,7 +108,7 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 - Do NOT change real numbers ({metrics_str})
 - Preserved companies: {companies_str} -- names stay as-is
 - Preserved school: {school}
-- Must fit 1 page.
+- MUST fit 1 page. Hard limits: max 14 bullets total, max 4 per experience entry, max 2 per project. Keep bullets concise (under 30 words each).
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 

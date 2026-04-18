@@ -98,15 +98,22 @@ defaults:
   results_per_site: 100  # Max results per board per query
   hours_old: 72          # Only jobs posted within this many hours
 
-# Negative keywords -- skip jobs with these in the title (case-insensitive)
+# Negative keywords -- skip jobs with these in the title (case-insensitive).
+# Used by all discovery modules (jobspy, workday, smartextract) to filter
+# out jobs at insert time before they reach scoring or apply.
 exclude_titles:
-  - "senior director"
-  - "VP "
+  - "senior"
+  - "staff"
+  - "lead"
+  - "principal"
+  - "director"
+  - "VP"
   - "vice president"
   - "chief"
+  - "architect"
   - "intern"
   - "internship"
   - "co-op"
+  - "entry level"
   - "clearance required"
   - "TS/SCI"
-  - "principal scientist"

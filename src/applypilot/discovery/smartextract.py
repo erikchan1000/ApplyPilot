@@ -57,6 +57,19 @@ def _load_location_filter(search_cfg: dict | None = None):
     return accept, reject
 
 
+def _load_exclude_titles(search_cfg: dict) -> list[str]:
+    """Extract exclude_titles patterns from search config (case-insensitive)."""
+    return [t.lower() for t in search_cfg.get("exclude_titles", [])]
+
+
+def _title_ok(title: str | None, exclude_patterns: list[str]) -> bool:
+    """Check if a job title passes the user's title exclusion filter."""
+    if not title or not exclude_patterns:
+        return True
+    title_lower = title.lower()
+    return not any(pat in title_lower for pat in exclude_patterns)
+
+
 def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
     """Check if a job location passes the user's location filter."""
     if not location:
@@ -92,19 +105,24 @@ def _store_jobs_filtered(
     strategy: str,
     accept_locs: list[str],
     reject_locs: list[str],
+    exclude_titles: list[str] | None = None,
 ) -> tuple[int, int]:
-    """Store jobs with location filtering. Returns (new, existing)."""
+    """Store jobs with location and title filtering. Returns (new, existing)."""
     now = datetime.now(timezone.utc).isoformat()
     new = 0
     existing = 0
-    filtered = 0
+    loc_filtered = 0
+    title_filtered = 0
 
     for job in jobs:
         url = job.get("url")
         if not url:
             continue
         if not _location_ok(job.get("location"), accept_locs, reject_locs):
-            filtered += 1
+            loc_filtered += 1
+            continue
+        if exclude_titles and not _title_ok(job.get("title"), exclude_titles):
+            title_filtered += 1
             continue
         try:
             conn.execute(
@@ -117,8 +135,10 @@ def _store_jobs_filtered(
         except sqlite3.IntegrityError:
             existing += 1
 
-    if filtered:
-        log.info("Filtered %d jobs (wrong location)", filtered)
+    if loc_filtered:
+        log.info("Filtered %d jobs (wrong location)", loc_filtered)
+    if title_filtered:
+        log.info("Filtered %d jobs (excluded title)", title_filtered)
     conn.commit()
     return new, existing
 
@@ -1016,6 +1036,7 @@ def _run_all(
     targets: list[dict],
     accept_locs: list[str],
     reject_locs: list[str],
+    exclude_titles: list[str] | None = None,
     workers: int = 1,
 ) -> dict:
     """Run smart extract on all targets.
@@ -1038,7 +1059,8 @@ def _run_all(
         if jobs:
             new, existing = _store_jobs_filtered(conn, jobs, target["name"],
                                                   r.get("strategy", "?"),
-                                                  accept_locs, reject_locs)
+                                                  accept_locs, reject_locs,
+                                                  exclude_titles)
             total_new += new
             total_existing += existing
             log.info("DB: +%d new, %d already existed", new, existing)
@@ -1103,6 +1125,7 @@ def run_smart_extract(
     """
     search_cfg = config.load_search_config()
     accept_locs, reject_locs = _load_location_filter(search_cfg)
+    exclude_titles = _load_exclude_titles(search_cfg)
 
     targets = build_scrape_targets(sites=sites, search_cfg=search_cfg)
 
@@ -1115,4 +1138,4 @@ def run_smart_extract(
     log.info("Sites: %d searchable, %d static | Total targets: %d (workers=%d)",
              search_sites, static_sites, len(targets), workers)
 
-    return _run_all(targets, accept_locs, reject_locs, workers=workers)
+    return _run_all(targets, accept_locs, reject_locs, exclude_titles, workers=workers)

@@ -50,6 +50,19 @@ def _load_location_filter(search_cfg: dict | None = None):
     return accept, reject
 
 
+def _load_exclude_titles(search_cfg: dict) -> list[str]:
+    """Extract exclude_titles patterns from search config (case-insensitive)."""
+    return [t.lower() for t in search_cfg.get("exclude_titles", [])]
+
+
+def _title_ok(title: str | None, exclude_patterns: list[str]) -> bool:
+    """Check if a job title passes the user's title exclusion filter."""
+    if not title or not exclude_patterns:
+        return True
+    title_lower = title.lower()
+    return not any(pat in title_lower for pat in exclude_patterns)
+
+
 def _location_ok(location: str | None, accept: list[str], reject: list[str]) -> bool:
     """Check if a job location passes the user's location filter."""
     if not location:
@@ -194,8 +207,9 @@ def search_employer(
     max_results: int = 0,
     accept_locs: list[str] | None = None,
     reject_locs: list[str] | None = None,
+    exclude_titles: list[str] | None = None,
 ) -> list[dict]:
-    """Search an employer, paginate through all results, optionally filter by location."""
+    """Search an employer, paginate through all results, optionally filter by location/title."""
     log.info("%s: searching \"%s\"...", employer["name"], search_text)
 
     all_jobs: list[dict] = []
@@ -220,13 +234,17 @@ def search_employer(
             break
 
         for j in postings:
+            title = j.get("title", "")
+            if exclude_titles and not _title_ok(title, exclude_titles):
+                continue
+
             loc = j.get("locationsText", "")
             if location_filter and accept_locs is not None and reject_locs is not None:
                 if not _location_ok(loc, accept_locs, reject_locs):
                     continue
 
             all_jobs.append({
-                "title": j.get("title", ""),
+                "title": title,
                 "location": loc,
                 "posted": j.get("postedOn", ""),
                 "external_path": j.get("externalPath", ""),
@@ -347,6 +365,7 @@ def _process_one(
     location_filter: bool,
     accept_locs: list[str],
     reject_locs: list[str],
+    exclude_titles: list[str] | None = None,
 ) -> dict:
     """Search one employer, fetch details, store results."""
     emp = employers[employer_key]
@@ -357,6 +376,7 @@ def _process_one(
             location_filter=location_filter,
             accept_locs=accept_locs,
             reject_locs=reject_locs,
+            exclude_titles=exclude_titles,
         )
     except Exception as e:
         log.error("%s: ERROR searching '%s': %s", emp["name"], search_text, e)
@@ -390,6 +410,7 @@ def scrape_employers(
     max_results: int = 0,
     accept_locs: list[str] | None = None,
     reject_locs: list[str] | None = None,
+    exclude_titles: list[str] | None = None,
     workers: int = 1,
 ) -> dict:
     """Run full scrape: search -> filter -> detail -> store.
@@ -423,7 +444,7 @@ def scrape_employers(
             futures = {
                 pool.submit(
                     _process_one, key, employers, search_text,
-                    location_filter, accept_locs, reject_locs,
+                    location_filter, accept_locs, reject_locs, exclude_titles,
                 ): key
                 for key in valid_keys
             }
@@ -446,7 +467,7 @@ def scrape_employers(
         for key in valid_keys:
             result = _process_one(
                 key, employers, search_text,
-                location_filter, accept_locs, reject_locs,
+                location_filter, accept_locs, reject_locs, exclude_titles,
             )
             completed += 1
             total_new += result["new"]
@@ -493,6 +514,7 @@ def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> di
     search_cfg = config.load_search_config()
     queries_cfg = search_cfg.get("queries", [])
     accept_locs, reject_locs = _load_location_filter(search_cfg)
+    exclude_titles = _load_exclude_titles(search_cfg)
 
     # Default to tier 1-2 queries for workday scraping
     max_tier = search_cfg.get("workday_max_tier", 2)
@@ -526,6 +548,7 @@ def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> di
             location_filter=location_filter,
             accept_locs=accept_locs,
             reject_locs=reject_locs,
+            exclude_titles=exclude_titles,
             workers=workers,
         )
         grand_new += result["new"]
