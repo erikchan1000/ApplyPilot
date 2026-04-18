@@ -234,10 +234,13 @@ class TestBuildHtmlStyling:
         assert contact_css
         assert "#595959" in contact_css.group()
 
-    def test_entry_title_12pt(self, html: str):
+    def test_entry_title_12pt_flex(self, html: str):
         css = re.search(r"\.entry-title\s*\{[^}]+\}", html)
         assert css
-        assert "font-size: 12pt" in css.group()
+        rule = css.group()
+        assert "font-size: 12pt" in rule
+        assert "display: flex" in rule
+        assert "justify-content: space-between" in rule
 
     def test_entry_subtitle_not_italic(self, html: str):
         css = re.search(r"\.entry-sub\s*\{[^}]+\}", html)
@@ -257,12 +260,13 @@ class TestBuildHtmlStyling:
         assert ul_css
         assert "disc" in ul_css.group()
 
-    def test_edu_12pt_bold(self, html: str):
+    def test_edu_12pt_bold_flex(self, html: str):
         css = re.search(r"\.edu\s*\{[^}]+\}", html)
         assert css
         rule = css.group()
         assert "font-size: 12pt" in rule
         assert "font-weight: 700" in rule
+        assert "display: flex" in rule
 
 
 # ── build_html (content / structure) ─────────────────────────────────────
@@ -280,20 +284,19 @@ class TestBuildHtmlContent:
         assert "jane@example.com" in html
 
     def test_section_titles_present(self, html: str):
-        assert "Technical Skills" in html
-        assert "Experience" in html
-        assert "Projects" in html
-        assert "Education" in html
+        assert ">Skills<" in html
+        assert ">Experience<" in html
+        assert ">Projects<" in html
+        assert ">Education<" in html
 
     def test_summary_excluded(self, html: str):
         assert "Summary" not in html
-        assert "Experienced backend engineer." not in html
 
     def test_section_order(self, html: str):
-        exp_pos = html.index("Experience")
-        proj_pos = html.index("Projects")
-        skills_pos = html.index("Technical Skills")
-        edu_pos = html.index("Education")
+        exp_pos = html.index(">Experience<")
+        proj_pos = html.index(">Projects<")
+        skills_pos = html.index(">Skills<")
+        edu_pos = html.index(">Education<")
         assert exp_pos < proj_pos < skills_pos < edu_pos
 
     def test_skills_rendered(self, html: str):
@@ -325,6 +328,90 @@ class TestBuildHtmlContent:
         assert "</body>" in html
 
 
+# ── build_html (entry splitting / contact / skills consolidation) ────────
+
+
+class TestBuildHtmlNewFeatures:
+    """Tests for features added after the initial docx alignment."""
+
+    @pytest.fixture
+    def html(self, minimal_resume_text: str) -> str:
+        return build_html(parse_resume(minimal_resume_text))
+
+    # Entry splitting: "Role at Company" → Company on title, Role on subtitle
+    def test_experience_company_on_title_line(self, html: str):
+        assert ">Acme Corp<" in html or "Acme Corp</span>" in html
+
+    def test_experience_role_bold_on_subtitle(self, html: str):
+        assert "<b>Software Engineer</b>" in html
+
+    def test_experience_company_and_role_separated(self, html: str):
+        title_match = re.search(r'class="entry-title"[^>]*>.*?</div>', html)
+        assert title_match
+        assert "Acme Corp" in title_match.group()
+        assert "Software Engineer" not in title_match.group()
+
+    def test_experience_date_on_title_line(self, html: str):
+        title_match = re.search(r'class="entry-title"[^>]*>.*?</div>', html)
+        assert title_match
+        assert "Jan 2023 - Present" in title_match.group()
+
+    # Project entries: strip description after " - ", tech inline
+    def test_project_name_trimmed(self, html: str):
+        assert "Open Source CLI Tool" in html
+        assert "Developer productivity utility" not in html
+
+    def test_project_tech_inline(self, html: str):
+        title_match = re.search(r'class="entry-title".*?Open Source CLI.*?</div>', html)
+        assert title_match
+        assert "Rust" in title_match.group()
+
+    def test_project_no_subtitle_line(self, html: str):
+        proj_section = html[html.index(">Projects<"):]
+        proj_entry = proj_section[:proj_section.index("</div></div>") + len("</div></div>")]
+        assert "entry-sub" not in proj_entry
+
+    # Contact link rendering
+    def test_contact_github_rendered_as_link(self, html: str):
+        assert '<a href="https://github.com/janedoe">GitHub</a>' in html
+
+    def test_contact_phone_formatted(self, html: str):
+        assert "(555) 123-4567" in html
+        assert "5551234567" not in html
+
+    # Skills consolidation: DevOps/Databases/Tools → Technologies
+    def test_skills_consolidated_into_technologies(self, html: str):
+        assert "Technologies:" in html
+        assert "Docker" in html
+        assert "PostgreSQL" in html
+        assert "REST APIs" in html
+
+    def test_skills_languages_and_frameworks_kept(self, html: str):
+        assert "Languages:" in html
+        assert "Frameworks:" in html
+
+    def test_skills_original_categories_not_shown(self, html: str):
+        assert "DevOps" not in html
+        assert "Databases:" not in html
+        assert "Tools:" not in html
+
+    # Education: "| Bachelor's..." stripped
+    def test_education_bachelors_stripped(self, html: str):
+        assert "Bachelor" not in html
+
+    # Profile-driven education GPA/dates
+    def test_education_with_profile_gpa(self, minimal_resume_text: str):
+        profile = {"education": {"gpa": "3.90", "start_date": "Sep 2018", "end_date": "Jun 2022"}}
+        html = build_html(parse_resume(minimal_resume_text), profile=profile)
+        assert "GPA: 3.90" in html
+        assert "Sep 2018" in html
+        assert "Jun 2022" in html
+
+    def test_education_without_profile(self, html: str):
+        assert "MIT" in html
+        assert "GPA" not in html
+
+
 # ── build_html with real samples ─────────────────────────────────────────
 
 
@@ -341,7 +428,7 @@ class TestBuildHtmlRealSamples:
         r = parse_resume(alt_resume_text)
         html = build_html(r)
         assert "Erik Chan" in html
-        assert "Experience" in html
+        assert ">Experience<" in html
 
     def test_real_sample_no_old_styling(self, sample_resume_text: str):
         html = build_html(parse_resume(sample_resume_text))
@@ -360,17 +447,22 @@ class TestBuildHtmlRealSamples:
             _, date = _split_date(e["subtitle"])
             assert date, f"No date found in subtitle: {e['subtitle']}"
 
+    def test_real_sample_companies_split(self, sample_resume_text: str):
+        html = build_html(parse_resume(sample_resume_text))
+        assert "<b>Full Stack Software Engineer</b>" in html
+        assert "<b>Founding Full Stack Engineer</b>" in html
+
 
 # ── _build_entry_html ────────────────────────────────────────────────────
 
 
 class TestBuildEntryHtml:
-    def test_entry_with_date(self):
+    def test_entry_with_at_splits_company_and_role(self):
         entries = [{"title": "Dev at FooCorp", "subtitle": "Python | Jan 2024 - Present", "bullets": ["Did stuff."]}]
         html = _build_entry_html(entries)
         assert 'class="entry-title"' in html
         assert "FooCorp" in html
-        assert "Dev" in html
+        assert "<b>Dev</b>" in html
         assert 'class="date"' in html
         assert "Jan 2024 - Present" in html
         assert "<li>Did stuff.</li>" in html
@@ -387,11 +479,20 @@ class TestBuildEntryHtml:
         assert "entry-sub" not in html
         assert "Solo Project" in html
 
+    def test_project_strips_description(self):
+        entries = [{"title": "My App - A cool web app", "subtitle": "React | N/A", "bullets": ["Built it."]}]
+        html = _build_entry_html(entries)
+        assert "My App" in html
+        assert "A cool web app" not in html
+        assert "React" in html
+
     def test_multiple_entries(self):
         entries = [
-            {"title": "A", "subtitle": "X | Jan 2024 - Present", "bullets": ["b1"]},
-            {"title": "B", "subtitle": "Y | Mar 2023 - Dec 2023", "bullets": ["b2"]},
+            {"title": "A at X", "subtitle": "T1 | Jan 2024 - Present", "bullets": ["b1"]},
+            {"title": "B at Y", "subtitle": "T2 | Mar 2023 - Dec 2023", "bullets": ["b2"]},
         ]
         html = _build_entry_html(entries)
         assert html.count('class="entry"') == 2
         assert html.count('class="date"') == 2
+        assert "X" in html and "Y" in html
+        assert "<b>A</b>" in html and "<b>B</b>" in html
