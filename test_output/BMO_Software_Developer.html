@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@page {
+    size: letter;
+    margin: 0.2in 0.6in;
+}
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.15;
+    color: #000;
+}
+.header {
+    text-align: center;
+    margin-bottom: 0;
+}
+.name {
+    font-size: 30pt;
+    font-weight: 700;
+    color: #000;
+}
+.title {
+    font-size: 11pt;
+    color: #595959;
+    font-weight: 700;
+}
+.location {
+    font-size: 11pt;
+    color: #595959;
+    font-weight: 700;
+}
+.contact {
+    font-size: 12pt;
+    color: #595959;
+    font-weight: 700;
+}
+.contact a {
+    color: #595959;
+    text-decoration: none;
+}
+.section {
+    margin-top: 8pt;
+}
+.section-title {
+    font-size: 14pt;
+    font-weight: 700;
+    color: #0D0D0D;
+    text-transform: uppercase;
+    border-bottom: 0.5pt solid #000;
+    padding-bottom: 1pt;
+    margin-bottom: 3pt;
+}
+.skill-row {
+    font-size: 11pt;
+    margin: 0;
+    padding-left: 4pt;
+    line-height: 1.15;
+}
+.skill-row + .skill-row {
+    margin-top: 1pt;
+}
+.skill-cat {
+    font-weight: 700;
+}
+.entry {
+    margin-top: 3pt;
+    break-inside: avoid;
+}
+.entry-title {
+    font-weight: 700;
+    font-size: 12pt;
+    color: #0D0D0D;
+}
+.entry-sub {
+    font-size: 11pt;
+    color: #000;
+    margin-top: 1pt;
+    display: flex;
+    justify-content: space-between;
+}
+.entry-sub .date {
+    font-weight: 700;
+    white-space: nowrap;
+    margin-left: 12pt;
+}
+ul {
+    margin-left: 0.25in;
+    padding: 0;
+    list-style-type: disc;
+}
+li {
+    font-size: 11pt;
+    margin-top: 1pt;
+    padding-left: 2pt;
+    line-height: 1.15;
+}
+.edu {
+    font-size: 12pt;
+    font-weight: 700;
+    color: #0D0D0D;
+    margin-top: 3pt;
+}
+</style>
+</head>
+<body>
+<div class="header">
+    <div class="name">Erik Chan</div>
+    <div class="contact">erikchan1010@gmail.com | (909) 438-1726 | <a href="https://github.com/erikchan1000">GitHub</a> | <a href="https://www.linkedin.com/in/erikchan01/">LinkedIn</a></div>
+</div>
+<div class="section"><div class="section-title">Experience</div><div class="entry"><div class="entry-title">Full Stack Software Engineer at Stackline</div><div class="entry-sub"><span>AWS Lambda, AWS Redshift, AWS DynamoDB, Node.js, React, C#, Go</span><span class="date">Jul 2024 - Present</span></div><ul><li>Engineered AWS Lambda-based data crawlers with fault-tolerant state machines, reducing data errors by 40% and ensuring 100% data integrity for downstream analytics via API integrations.</li><li>Designed and deployed a high-availability checkout service on AWS, processing over 600K orders annually with 99.9% uptime, leveraging autoscaling and circuit breaker patterns.</li><li>Developed a serverless campaign management microservice, automating 100K+ Amazon Ads operations monthly through idempotent REST/GraphQL APIs and Kafka event streams.</li><li>Implemented a parallel execution framework on AWS, quadrupling content generation throughput for AI-powered account enrichment and personalized outbound sequencing.</li></ul></div><div class="entry"><div class="entry-title">Founding Full Stack Engineer at Breaking Hits</div><div class="entry-sub"><span>Python, Tensorflow, PyTorch</span><span class="date">Oct 2023 - Jul 2024</span></div><ul><li>Built Python-based data pipelines on AWS, processing 100K+ audio tracks daily and improving classification accuracy by 25% for AI-driven lead scoring.</li></ul></div><div class="entry"><div class="entry-title">Full Stack Software Engineer at Edenspiekermann</div><div class="entry-sub"><span>Typescript, Java, C++, Kotlin, React Native, Next.js, AWS, GraphQL</span><span class="date">Mar 2023 - Sep 2023</span></div><ul><li>Integrated REST/GraphQL APIs and observability tools across client Go-To-Market stacks, improving data reliability for critical business funnels.</li><li>Developed a reusable React component library with TypeScript, reducing frontend build times by 30% and accelerating internal tool delivery.</li></ul></div></div>
+<div class="section"><div class="section-title">Projects</div><div class="entry"><div class="entry-title">Real-Time Trading Infrastructure - Low-latency market data and risk management system</div><div class="entry-sub"><span>Python, Rust</span></div><ul><li>Engineered a low-latency market data pipeline, processing over 10,000 events per second with sub-100ms latency for high-frequency trading.</li><li>Designed an automated risk management system, implementing market-making strategies and arbitrage detection to minimize downside exposure.</li></ul></div><div class="entry"><div class="entry-title">AI Hedge Fund - Financial data pipeline and autonomous research agents</div><div class="entry-sub"><span>Flask, Next.js, LangChain, Pandas, NumPy</span></div><ul><li>Built a production financial data pipeline, ingesting real-time market feeds from multiple exchanges with sub-second data freshness.</li><li>Developed autonomous research agents to automate financial analysis, reducing manual research time by 10+ hours weekly.</li></ul></div></div>
+<div class="section"><div class="section-title">Technical Skills</div><div class="skill-row"><span class="skill-cat">Languages:</span> Node.js, TypeScript, Python, JavaScript (ES6+), SQL, C#, Go, Java, C++, Kotlin, Rust</div>
+<div class="skill-row"><span class="skill-cat">Frameworks:</span> React.js, Express, Next.js, Flask, FastAPI, Vue.js, React Native, TensorFlow, PyTorch</div>
+<div class="skill-row"><span class="skill-cat">DevOps & Infra:</span> AWS (Lambda, DynamoDB, S3, API Gateway, RDS, SQS, SNS, ECS, EKS, CloudWatch, IAM, CodePipeline), Docker, Kubernetes, Terraform, CI/CD, Git, Kafka</div>
+<div class="skill-row"><span class="skill-cat">Databases:</span> SQL, DynamoDB, Redis</div>
+<div class="skill-row"><span class="skill-cat">Tools:</span> REST APIs, GraphQL</div>
+</div>
+<div class="section"><div class="section-title">Education</div><div class="edu">University of California, Riverside | Bachelor's</div></div>
+</body>
+</html>

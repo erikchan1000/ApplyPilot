@@ -68,7 +68,7 @@ FABRICATION_WATCHLIST: set[str] = {
     "certif", "certified", "pmp", "scrum master", "aws certified",
 }
 
-REQUIRED_SECTIONS: set[str] = {"SUMMARY", "TECHNICAL SKILLS", "EXPERIENCE", "PROJECTS", "EDUCATION"}
+REQUIRED_SECTIONS: set[str] = {"TECHNICAL SKILLS", "EXPERIENCE", "PROJECTS", "EDUCATION"}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -83,6 +83,15 @@ def _build_skills_set(profile: dict) -> set[str]:
         elif isinstance(category, set):
             allowed.update(s.lower().strip() for s in category)
     return allowed
+
+
+def _term_allowed(term: str, allowed: set[str]) -> bool:
+    """Check if a detected term is explicitly allowed by profile skills."""
+    t = term.lower().strip()
+    for skill in allowed:
+        if t == skill or t in skill or skill in t:
+            return True
+    return False
 
 
 def sanitize_text(text: str) -> str:
@@ -100,7 +109,7 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
     """Validate individual JSON fields from an LLM-generated tailored resume.
 
     Args:
-        data:    Parsed JSON from the LLM (title, summary, skills, experience, projects, education).
+        data:    Parsed JSON from the LLM (title, skills, experience, projects, education).
         profile: User profile dict from load_profile().
         mode:    Validation strictness — "strict", "normal", or "lenient".
                  strict  → banned words are errors (trigger retries)
@@ -114,22 +123,23 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
     warnings: list[str] = []
 
     # Required keys — always checked regardless of mode
-    for key in ("title", "summary", "skills", "experience", "projects", "education"):
+    for key in ("title", "skills", "experience", "projects", "education"):
         if key not in data or not data[key]:
             errors.append(f"Missing required field: {key}")
     if errors:
         return {"passed": False, "errors": errors, "warnings": warnings}
 
     # Collect all text for bulk checks
-    all_text_parts: list[str] = [data["summary"]]
+    all_text_parts: list[str] = []
 
     # Skills: check for fabrication (always enforced)
+    allowed_skills = _build_skills_set(profile)
     if isinstance(data["skills"], dict):
         skills_text = " ".join(str(v) for v in data["skills"].values()).lower()
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in skills_text:
+            if fake in skills_text and not _term_allowed(fake, allowed_skills):
                 errors.append(f"Fabricated skill: '{fake}'")
 
     # Experience: preserved companies must be present (always enforced)
@@ -204,7 +214,6 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
 
     # 1. Check required sections exist (flexible matching)
     section_variants: dict[str, list[str]] = {
-        "SUMMARY": ["summary", "professional summary", "profile"],
         "TECHNICAL SKILLS": ["technical skills", "skills", "tech stack", "core skills", "technologies"],
         "EXPERIENCE": ["experience", "work experience", "professional experience"],
         "PROJECTS": ["projects", "personal projects", "key projects", "selected projects"],
@@ -247,20 +256,23 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     skills_end = text_lower.find("experience", skills_start) if skills_start != -1 else -1
     if skills_start != -1 and skills_end != -1:
         skills_block = text_lower[skills_start:skills_end]
+        allowed_skills = _build_skills_set(profile)
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in skills_block:
+            if fake in skills_block and not _term_allowed(fake, allowed_skills):
                 errors.append(f"FABRICATED SKILL in Technical Skills: '{fake}'")
 
     # 8. Scan full document for fabrication watchlist items not in original
     if original_text:
         original_lower = original_text.lower()
+        allowed_skills = _build_skills_set(profile)
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
             if fake in text_lower and fake not in original_lower:
-                warnings.append(f"New tool/skill appeared: '{fake}' (not in original)")
+                if not _term_allowed(fake, allowed_skills):
+                    warnings.append(f"New tool/skill appeared: '{fake}' (not in original)")
 
     # 9. Em dashes (should be auto-fixed by sanitize_text, but safety net)
     if "\u2014" in text or "\u2013" in text:
@@ -277,7 +289,7 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
         errors.append(f"LLM self-talk: '{found_leaks[0]}'")
 
     # 12. Duplicate section detection
-    for section_name in ["summary", "experience", "education", "projects"]:
+    for section_name in ["experience", "education", "projects"]:
         count = text_lower.count(f"\n{section_name}\n") + text_lower.count(f"\n{section_name} \n")
         if text_lower.startswith(f"{section_name}\n"):
             count += 1

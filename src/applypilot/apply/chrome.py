@@ -6,6 +6,7 @@ worker profile setup/cloning, and cross-platform process cleanup.
 
 import json
 import logging
+import os
 import platform
 import shutil
 import subprocess
@@ -17,8 +18,27 @@ from applypilot import config
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_base_cdp_port() -> int:
+    """Get the base CDP port from env with safe fallback."""
+    raw = os.environ.get("APPLYPILOT_CDP_BASE_PORT")
+    if not raw:
+        return 9222
+    try:
+        port = int(raw)
+    except ValueError:
+        logger.warning("Invalid APPLYPILOT_CDP_BASE_PORT=%r; using 9222", raw)
+        return 9222
+
+    if 1024 <= port <= 65535:
+        return port
+
+    logger.warning("Out-of-range APPLYPILOT_CDP_BASE_PORT=%r; using 9222", raw)
+    return 9222
+
+
 # CDP port base — each worker uses BASE_CDP_PORT + worker_id
-BASE_CDP_PORT = 9222
+BASE_CDP_PORT = _resolve_base_cdp_port()
 
 # Track Chrome processes per worker for cleanup
 _chrome_procs: dict[int, subprocess.Popen] = {}
@@ -61,6 +81,50 @@ def _kill_process_tree(pid: int) -> None:
         logger.debug("Failed to kill process tree for PID %d", pid, exc_info=True)
 
 
+def _get_process_cmdline(pid: int) -> str:
+    """Best-effort process command line lookup."""
+    try:
+        if platform.system() == "Windows":
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"(Get-CimInstance Win32_Process -Filter \"ProcessId = {pid}\").CommandLine",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.stdout.strip()
+
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _is_applypilot_worker_process(pid: int, port: int | None = None) -> bool:
+    """Return True when PID belongs to an ApplyPilot-managed Chrome worker."""
+    cmdline = _get_process_cmdline(pid)
+    if not cmdline:
+        return False
+
+    worker_root = str(config.CHROME_WORKER_DIR)
+    if worker_root not in cmdline:
+        return False
+
+    if port is not None and f"--remote-debugging-port={port}" not in cmdline:
+        return False
+
+    return True
+
+
 def _kill_on_port(port: int) -> None:
     """Kill any process listening on a specific port (zombie cleanup).
 
@@ -76,7 +140,15 @@ def _kill_on_port(port: int) -> None:
                 if f":{port}" in line and "LISTENING" in line:
                     pid = line.strip().split()[-1]
                     if pid.isdigit():
-                        _kill_process_tree(int(pid))
+                        int_pid = int(pid)
+                        if _is_applypilot_worker_process(int_pid, port=port):
+                            _kill_process_tree(int_pid)
+                        else:
+                            logger.warning(
+                                "Skipping non-ApplyPilot process on port %d (pid %d)",
+                                port,
+                                int_pid,
+                            )
         else:
             # macOS / Linux
             result = subprocess.run(
@@ -86,7 +158,15 @@ def _kill_on_port(port: int) -> None:
             for pid_str in result.stdout.strip().splitlines():
                 pid_str = pid_str.strip()
                 if pid_str.isdigit():
-                    _kill_process_tree(int(pid_str))
+                    int_pid = int(pid_str)
+                    if _is_applypilot_worker_process(int_pid, port=port):
+                        _kill_process_tree(int_pid)
+                    else:
+                        logger.warning(
+                            "Skipping non-ApplyPilot process on port %d (pid %d)",
+                            port,
+                            int_pid,
+                        )
     except FileNotFoundError:
         logger.debug("Port-kill tool not found (netstat/lsof) for port %d", port)
     except Exception:
@@ -295,7 +375,9 @@ def cleanup_worker(worker_id: int, process: subprocess.Popen | None) -> None:
         worker_id: Numeric worker identifier.
         process: The Popen handle returned by launch_chrome.
     """
-    if process and process.poll() is None:
+    port = BASE_CDP_PORT + worker_id
+    _kill_on_port(port)
+    if process and process.poll() is None and _is_applypilot_worker_process(process.pid, port=port):
         _kill_process_tree(process.pid)
     with _chrome_lock:
         _chrome_procs.pop(worker_id, None)
@@ -312,9 +394,10 @@ def kill_all_chrome() -> None:
         _chrome_procs.clear()
 
     for wid, proc in procs.items():
-        if proc.poll() is None:
+        port = BASE_CDP_PORT + wid
+        if proc.poll() is None and _is_applypilot_worker_process(proc.pid, port=port):
             _kill_process_tree(proc.pid)
-        _kill_on_port(BASE_CDP_PORT + wid)
+        _kill_on_port(port)
 
     # Sweep base port in case of zombies
     _kill_on_port(BASE_CDP_PORT)
@@ -349,9 +432,10 @@ def cleanup_on_exit() -> None:
         _chrome_procs.clear()
 
     for wid, proc in procs.items():
-        if proc.poll() is None:
+        port = BASE_CDP_PORT + wid
+        if proc.poll() is None and _is_applypilot_worker_process(proc.pid, port=port):
             _kill_process_tree(proc.pid)
-        _kill_on_port(BASE_CDP_PORT + wid)
+        _kill_on_port(port)
 
     # Sweep base port for any orphan
     _kill_on_port(BASE_CDP_PORT)

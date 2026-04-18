@@ -163,6 +163,14 @@ def _setup_profile() -> dict:
         "real_metrics": [s.strip() for s in metrics.split(",") if s.strip()],
     }
 
+    # -- Education --
+    console.print("\n[bold cyan]Education[/bold cyan]")
+    profile["education"] = {
+        "gpa": Prompt.ask("GPA (e.g. 3.89)", default=""),
+        "start_date": Prompt.ask("Start date (e.g. Sep 2018)", default=""),
+        "end_date": Prompt.ask("End date (e.g. Jun 2022)", default=""),
+    }
+
     # -- EEO Voluntary (defaults) --
     profile["eeo_voluntary"] = {
         "gender": "Decline to self-identify",

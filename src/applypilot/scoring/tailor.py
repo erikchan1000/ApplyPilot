@@ -75,9 +75,8 @@ Take the base resume and job description. Return a tailored resume as a JSON obj
 
 ## RECRUITER SCAN (6 seconds):
 1. Title -- matches what they're hiring?
-2. Summary -- 2 sentences proving you've done this work
-3. First 3 bullets of most recent role -- verbs and outcomes match?
-4. Skills -- must-haves visible immediately?
+2. First 3 bullets of most recent role -- verbs and outcomes match?
+3. Skills -- must-haves visible immediately?
 
 ## SKILLS BOUNDARY (real skills only):
 {skills_block}
@@ -87,8 +86,6 @@ You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, R
 ## TAILORING RULES:
 
 TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
-
-SUMMARY: Rewrite from scratch. Lead with the 1-2 skills that matter most for THIS role. Sound like someone who's done this job.
 
 SKILLS: Reorder each category so the job's must-haves appear first.
 
@@ -115,7 +112,7 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
-{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
+{{"title":"Role Title","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
 
 
 def _build_judge_prompt(profile: dict) -> str:
@@ -141,7 +138,6 @@ ISSUES: (list any problems, or "none")
 
 ## CONTEXT -- what the tailoring engine was instructed to do (all of this is ALLOWED):
 - Change the title to match the target role
-- Rewrite the summary from scratch for the target job
 - Reorder bullets and projects to put the most relevant first
 - Reframe bullets to use the job's language
 - Drop low-relevance bullets and replace with more relevant ones from other sections
@@ -162,7 +158,7 @@ ISSUES: (list any problems, or "none")
 - Describing the same work with different emphasis
 - Dropping bullets entirely
 - Reordering anything
-- Changing the title or summary completely
+- Changing the title completely
 
 ## TOLERANCE RULE:
 The goal is to get interviews, not to be a perfect fact-checker. Allow up to 3 minor stretches per resume:
@@ -270,11 +266,6 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
         contact_parts.append(personal["linkedin_url"])
     if contact_parts:
         lines.append(" | ".join(contact_parts))
-    lines.append("")
-
-    # Summary
-    lines.append("SUMMARY")
-    lines.append(sanitize_text(data["summary"]))
     lines.append("")
 
     # Technical Skills

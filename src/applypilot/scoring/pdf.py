@@ -5,11 +5,18 @@ and exports to PDF using headless Chromium via Playwright.
 """
 
 import logging
+import re
 from pathlib import Path
 
 from applypilot.config import TAILORED_DIR
 
 log = logging.getLogger(__name__)
+
+_DATE_PATTERN = re.compile(
+    r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
+    r"\s+\d{4}\s*[-–—]\s*(?:Present|\w+\s+\d{4})"
+    r"|N/A)",
+)
 
 
 # ── Resume Parser ────────────────────────────────────────────────────────
@@ -18,7 +25,7 @@ def parse_resume(text: str) -> dict:
     """Parse a structured text resume into sections.
 
     Expects a format with header lines (name, title, location, contact)
-    followed by ALL-CAPS section headers (SUMMARY, TECHNICAL SKILLS, etc.).
+    followed by ALL-CAPS section headers (TECHNICAL SKILLS, EXPERIENCE, etc.).
 
     Args:
         text: Full resume text.
@@ -28,15 +35,22 @@ def parse_resume(text: str) -> dict:
     """
     lines = [line.rstrip() for line in text.strip().split("\n")]
 
-    # Header: first few lines before SUMMARY
+    # Header: first few lines before the first ALL-CAPS section header
     header_lines: list[str] = []
     body_start = 0
     for i, line in enumerate(lines):
-        if line.strip().upper() == "SUMMARY":
+        stripped = line.strip()
+        if (
+            stripped
+            and stripped == stripped.upper()
+            and not stripped.startswith("-")
+            and len(stripped) > 3
+            and not stripped.startswith("\u2022")
+        ):
             body_start = i
             break
-        if line.strip():
-            header_lines.append(line.strip())
+        if stripped:
+            header_lines.append(stripped)
 
     name = header_lines[0] if len(header_lines) > 0 else ""
     title = header_lines[1] if len(header_lines) > 1 else ""
@@ -146,68 +160,166 @@ def parse_entries(text: str) -> list[dict]:
     return entries
 
 
+def _split_date(text: str) -> tuple[str, str]:
+    """Extract a trailing date range from a subtitle line.
+
+    Looks for patterns like "Jul 2024 - Present" or "N/A" after a pipe.
+
+    Returns:
+        (content, date) tuple. date is empty if no match found.
+    """
+    if " | " not in text:
+        return text, ""
+    parts = text.rsplit(" | ", 1)
+    if _DATE_PATTERN.search(parts[1]):
+        return parts[0].strip(), parts[1].strip()
+    return text, ""
+
+
 # ── HTML Template ────────────────────────────────────────────────────────
 
-def build_html(resume: dict) -> str:
+def _build_entry_html(entries: list[dict]) -> str:
+    """Build HTML for a list of experience/project entries."""
+    items = ""
+    for e in entries:
+        bullets = "".join(f"<li>{b}</li>" for b in e["bullets"])
+
+        # Split "Role at Company" into company (title line) and role (subtitle)
+        title = e["title"]
+        company = ""
+        role = ""
+        if " at " in title:
+            role, company = title.rsplit(" at ", 1)
+
+        tech = ""
+        date = ""
+        if e["subtitle"]:
+            tech, date = _split_date(e["subtitle"])
+
+        if company:
+            # Line 1: Company ............ Date
+            date_span = f'<span class="date">{date}</span>' if date and date != "N/A" else ""
+            title_html = (
+                f'<div class="entry-title">'
+                f'<span>{company}</span>'
+                f'{date_span}'
+                f'</div>'
+            )
+            # Line 2: Role | Tech
+            tech_part = f" | {tech}" if tech else ""
+            subtitle_html = f'<div class="entry-sub"><span><b>{role}</b>{tech_part}</span></div>'
+        else:
+            # Fallback for entries without " at " (e.g. projects)
+            # Strip descriptor after " - " (e.g. "Project Name - description")
+            project_name = title.split(" - ", 1)[0] if " - " in title else title
+            date_span = f'<span class="date">{date}</span>' if date and date != "N/A" else ""
+            tech_part = f'<span style="font-weight:normal"> | {tech}</span>' if tech else ""
+            title_html = (
+                f'<div class="entry-title">'
+                f'<span>{project_name}{tech_part}</span>'
+                f'{date_span}'
+                f'</div>'
+            )
+            subtitle_html = ""
+
+        items += (
+            f'<div class="entry">'
+            f'{title_html}'
+            f'{subtitle_html}'
+            f'<ul>{bullets}</ul>'
+            f'</div>'
+        )
+    return items
+
+
+def build_html(resume: dict, profile: dict | None = None) -> str:
     """Build professional resume HTML from parsed data.
+
+    Styled to match the reference .docx resume: Calibri font, black/gray
+    color scheme, thin black section borders, right-aligned dates.
 
     Args:
         resume: Parsed resume dict from parse_resume().
+        profile: Optional user profile dict (from load_profile()) for
+            dynamic education fields (gpa, start_date, end_date).
 
     Returns:
         Complete HTML string ready for PDF rendering.
     """
     sections = resume["sections"]
 
-    # Skills
+    # Skills — consolidate into Languages, Frameworks, Technologies
     skills_html = ""
     if "TECHNICAL SKILLS" in sections:
         skills = parse_skills(sections["TECHNICAL SKILLS"])
+        keep = {"Languages", "Frameworks"}
+        tech_values: list[str] = []
         rows = ""
         for cat, val in skills:
-            rows += f'<div class="skill-row"><span class="skill-cat">{cat}:</span> {val}</div>\n'
-        skills_html = f'<div class="section"><div class="section-title">Technical Skills</div>{rows}</div>'
+            if cat in keep:
+                rows += f'<div class="skill-row"><span class="skill-cat">{cat}:</span> {val}</div>\n'
+            else:
+                tech_values.append(val)
+        if tech_values:
+            merged = ", ".join(tech_values)
+            rows += f'<div class="skill-row"><span class="skill-cat">Technologies:</span> {merged}</div>\n'
+        skills_html = f'<div class="section"><div class="section-title">Skills</div>{rows}</div>'
 
     # Experience
     exp_html = ""
     if "EXPERIENCE" in sections:
         entries = parse_entries(sections["EXPERIENCE"])
-        items = ""
-        for e in entries:
-            bullets = "".join(f"<li>{b}</li>" for b in e["bullets"])
-            subtitle = f'<div class="entry-subtitle">{e["subtitle"]}</div>' if e["subtitle"] else ""
-            items += f'<div class="entry"><div class="entry-title">{e["title"]}</div>{subtitle}<ul>{bullets}</ul></div>'
+        items = _build_entry_html(entries)
         exp_html = f'<div class="section"><div class="section-title">Experience</div>{items}</div>'
 
     # Projects
     proj_html = ""
     if "PROJECTS" in sections:
         entries = parse_entries(sections["PROJECTS"])
-        items = ""
-        for e in entries:
-            bullets = "".join(f"<li>{b}</li>" for b in e["bullets"])
-            subtitle = f'<div class="entry-subtitle">{e["subtitle"]}</div>' if e["subtitle"] else ""
-            items += f'<div class="entry"><div class="entry-title">{e["title"]}</div>{subtitle}<ul>{bullets}</ul></div>'
+        items = _build_entry_html(entries)
         proj_html = f'<div class="section"><div class="section-title">Projects</div>{items}</div>'
 
-    # Education
+    # Education — pull GPA and dates from profile if available
+    edu_cfg = (profile or {}).get("education", {})
+    gpa = edu_cfg.get("gpa", "")
+    edu_start = edu_cfg.get("start_date", "")
+    edu_end = edu_cfg.get("end_date", "")
+
     edu_html = ""
     if "EDUCATION" in sections:
         edu_text = sections["EDUCATION"].strip()
-        edu_html = f'<div class="section"><div class="section-title">Education</div><div class="edu">{edu_text}</div></div>'
+        edu_text = re.sub(r"\s*\|\s*Bachelor'?s.*", "", edu_text)
+        if gpa:
+            edu_text = f"{edu_text} | GPA: {gpa}"
+        date_span = ""
+        if edu_start and edu_end:
+            date_span = f'<span class="date">{edu_start} – {edu_end}</span>'
+        edu_html = (
+            f'<div class="section"><div class="section-title">Education</div>'
+            f'<div class="edu">{edu_text}{date_span}</div></div>'
+        )
 
-    # Summary
-    summary_html = ""
-    if "SUMMARY" in sections:
-        summary_html = f'<div class="section"><div class="section-title">Summary</div><div class="summary">{sections["SUMMARY"].strip()}</div></div>'
-
-    # Contact line parsing
+    # Contact line parsing — convert raw URLs to hyperlinks, format phone
     contact = resume["contact"]
     contact_parts = [p.strip() for p in contact.split("|")] if contact else []
-    contact_html = " &nbsp;|&nbsp; ".join(contact_parts)
+    if resume["location"]:
+        contact_parts.append(resume["location"])
 
-    # Location line (may be empty)
-    location_html = f'<div class="location">{resume["location"]}</div>' if resume["location"] else ""
+    rendered_parts: list[str] = []
+    for part in contact_parts:
+        if "github.com" in part:
+            url = part if part.startswith("http") else f"https://{part}"
+            rendered_parts.append(f'<a href="{url}">GitHub</a>')
+        elif "linkedin.com" in part:
+            url = part if part.startswith("http") else f"https://{part}"
+            rendered_parts.append(f'<a href="{url}">LinkedIn</a>')
+        elif part.startswith("http://") or part.startswith("https://"):
+            rendered_parts.append(f'<a href="{part}">Website</a>')
+        elif re.fullmatch(r"\d{10}", part):
+            rendered_parts.append(f"({part[:3]}) {part[3:6]}-{part[6:]}")
+        else:
+            rendered_parts.append(part)
+    contact_html = " | ".join(rendered_parts)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -216,7 +328,7 @@ def build_html(resume: dict) -> str:
 <style>
 @page {{
     size: letter;
-    margin: 0.35in 0.5in;
+    margin: 0.2in 0.6in;
 }}
 * {{
     margin: 0;
@@ -225,107 +337,120 @@ def build_html(resume: dict) -> str:
 }}
 body {{
     font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
-    font-size: 10pt;
-    line-height: 1.35;
-    color: #1a1a1a;
+    font-size: 11pt;
+    line-height: 1.15;
+    color: #000;
+    max-width: 8.5in;
+    margin: 0 auto;
+    padding: 0.2in 0.6in;
 }}
 .header {{
     text-align: center;
-    margin-bottom: 4px;
-    padding-bottom: 4px;
-    border-bottom: 1.5px solid #2a7ab5;
+    margin-bottom: 0;
 }}
 .name {{
-    font-size: 18pt;
+    font-size: 30pt;
     font-weight: 700;
-    color: #1a3a5c;
-    letter-spacing: 0.5px;
+    color: #000;
 }}
 .title {{
-    font-size: 10.5pt;
-    color: #3a6b8c;
-    margin: 1px 0;
+    font-size: 11pt;
+    color: #595959;
+    font-weight: 700;
 }}
 .location {{
-    font-size: 9pt;
-    color: #555;
+    font-size: 11pt;
+    color: #595959;
+    font-weight: 700;
 }}
 .contact {{
-    font-size: 9pt;
-    color: #444;
-    margin-top: 1px;
+    font-size: 12pt;
+    color: #595959;
+    font-weight: 700;
 }}
 .contact a {{
-    color: #2c3e50;
+    color: #595959;
     text-decoration: none;
 }}
 .section {{
-    margin-top: 5px;
+    margin-top: 8pt;
 }}
 .section-title {{
-    font-size: 10pt;
+    font-size: 14pt;
     font-weight: 700;
-    color: #1a3a5c;
+    color: #0D0D0D;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
-    border-bottom: 1.5px solid #2a7ab5;
-    padding-bottom: 1px;
-    margin-bottom: 3px;
-}}
-.summary {{
-    font-size: 9.5pt;
-    color: #333;
-    line-height: 1.4;
+    border-bottom: 0.5pt solid #000;
+    padding-bottom: 1pt;
+    margin-bottom: 3pt;
 }}
 .skill-row {{
-    font-size: 9.5pt;
+    font-size: 11pt;
     margin: 0;
-    line-height: 1.35;
+    padding-left: 4pt;
+    line-height: 1.15;
+}}
+.skill-row + .skill-row {{
+    margin-top: 1pt;
 }}
 .skill-cat {{
-    font-weight: 600;
-    color: #1a3a5c;
+    font-weight: 700;
 }}
 .entry {{
-    margin-bottom: 4px;
+    margin-top: 3pt;
     break-inside: avoid;
 }}
 .entry-title {{
-    font-weight: 600;
-    font-size: 10pt;
-    color: #1a3a5c;
+    font-weight: 700;
+    font-size: 12pt;
+    color: #0D0D0D;
+    display: flex;
+    justify-content: space-between;
 }}
-.entry-subtitle {{
-    font-size: 9pt;
-    color: #4a7a9b;
-    font-style: italic;
-    margin-bottom: 1px;
+.entry-title .date {{
+    font-weight: 700;
+    white-space: nowrap;
+    margin-left: 12pt;
+}}
+.entry-sub {{
+    font-size: 11pt;
+    color: #000;
+    margin-top: 1pt;
 }}
 ul {{
-    margin-left: 14px;
-    padding: 0;
+    margin-left: 0;
+    padding-left: 0.14in;
+    list-style-type: disc;
 }}
 li {{
-    font-size: 9.5pt;
-    margin-bottom: 1px;
-    line-height: 1.35;
+    font-size: 11pt;
+    margin-top: 1pt;
+    padding-left: 2pt;
+    line-height: 1.15;
 }}
 .edu {{
-    font-size: 10pt;
+    font-size: 12pt;
+    font-weight: 700;
+    color: #0D0D0D;
+    margin-top: 3pt;
+    display: flex;
+    justify-content: space-between;
+}}
+.edu .date {{
+    font-weight: 700;
+    white-space: nowrap;
+    margin-left: 12pt;
 }}
 </style>
 </head>
 <body>
 <div class="header">
     <div class="name">{resume['name']}</div>
-    <div class="title">{resume['title']}</div>
-    {location_html}
     <div class="contact">{contact_html}</div>
 </div>
-{summary_html}
-{skills_html}
 {exp_html}
 {proj_html}
+{skills_html}
 {edu_html}
 </body>
 </html>"""
@@ -371,10 +496,16 @@ def convert_to_pdf(
     Returns:
         Path to the generated PDF (or HTML) file.
     """
+    from applypilot.config import load_profile
+
     text_path = Path(text_path)
     text = text_path.read_text(encoding="utf-8")
     resume = parse_resume(text)
-    html = build_html(resume)
+    try:
+        profile = load_profile()
+    except FileNotFoundError:
+        profile = None
+    html = build_html(resume, profile=profile)
 
     if html_only:
         out = output_path or text_path.with_suffix(".html")
