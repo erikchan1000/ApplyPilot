@@ -186,9 +186,13 @@ def collect_page_intelligence(url: str, headless: bool = True) -> dict:
         page = browser.new_page(user_agent=UA)
         page.on("response", on_response)
 
-        page.goto(url, timeout=60000)
-        page.wait_for_load_state("networkidle")
+        nav_response = page.goto(url, timeout=60000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
 
+        intel["http_status"] = nav_response.status if nav_response else None
         intel["page_title"] = page.title()
 
         # 1. JSON-LD
@@ -434,6 +438,7 @@ def format_strategy_briefing(intel: dict) -> str:
     """Lightweight briefing for strategy selection. No raw DOM."""
     sections: list[str] = []
     sections.append(f"PAGE: {intel['url']}")
+    sections.append(f"HTTP STATUS: {intel.get('http_status', '?')}")
     sections.append(f"TITLE: {intel['page_title']}")
 
     # JSON-LD
@@ -877,9 +882,16 @@ def _run_one_site(name: str, url: str) -> dict:
     t0 = time.time()
     intel = collect_page_intelligence(url)
     collect_time = time.time() - t0
-    log.info("Done in %.1fs | JSON-LD: %d | API: %d | testids: %d | cards: %d",
-             collect_time, len(intel["json_ld"]), len(intel["api_responses"]),
+    http_status = intel.get("http_status")
+    log.info("Done in %.1fs | HTTP %s | JSON-LD: %d | API: %d | testids: %d | cards: %d",
+             collect_time, http_status or "?", len(intel["json_ld"]), len(intel["api_responses"]),
              len(intel["data_testids"]), len(intel["card_candidates"]))
+
+    # Bail on HTTP errors (404, 403, 500, etc.)
+    if http_status and http_status >= 400:
+        log.warning("HTTP %d — skipping (page is an error page, not a job listing)", http_status)
+        return {"name": name, "status": "HTTP_ERROR", "error": f"HTTP {http_status}",
+                "total": 0, "titles": 0, "urls": 0, "salaries": 0, "descriptions": 0, "jobs": []}
 
     # Headful retry if page content is tiny
     full_html = intel.get("full_html", "")
@@ -998,7 +1010,7 @@ def build_scrape_targets(
     queries_cfg = search_cfg.get("queries", [])
     queries = [q["query"] for q in queries_cfg]
     locs = search_cfg.get("locations", [])
-    default_location = locs[0]["location"] if locs else ""
+    default_location = locs[0]["location"].strip("'\"") if locs else ""
 
     targets: list[dict] = []
 

@@ -35,6 +35,8 @@ class WorkerState:
     jobs_failed: int = 0
     jobs_done: int = 0
     total_cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
     log_file: Path | None = None
 
 
@@ -106,6 +108,15 @@ _STATUS_STYLES: dict[str, str] = {
 }
 
 
+def _fmt_tokens(n: int) -> str:
+    """Format a token count as a compact human-readable string (e.g. 1.2M, 45K)."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
+
+
 def render_dashboard() -> Table:
     """Build the Rich table showing all worker statuses.
 
@@ -121,14 +132,15 @@ def render_dashboard() -> Table:
     table.add_column("Last Action", min_width=20, max_width=35, no_wrap=True)
     table.add_column("OK", width=4, justify="right", style="green")
     table.add_column("Fail", width=4, justify="right", style="red")
-    table.add_column("Cost", width=8, justify="right")
+    table.add_column("Tokens (in/out)", width=16, justify="right")
 
     with _lock:
         states = sorted(_worker_states.values(), key=lambda s: s.worker_id)
 
     total_applied = 0
     total_failed = 0
-    total_cost = 0.0
+    total_in = 0
+    total_out = 0
 
     for s in states:
         elapsed = ""
@@ -140,6 +152,10 @@ def render_dashboard() -> Table:
 
         job_text = f"{s.job_title[:28]} @ {s.company[:16]}" if s.job_title else ""
 
+        tokens_text = ""
+        if s.input_tokens or s.output_tokens:
+            tokens_text = f"{_fmt_tokens(s.input_tokens)}/{_fmt_tokens(s.output_tokens)}"
+
         table.add_row(
             str(s.worker_id),
             job_text,
@@ -149,17 +165,19 @@ def render_dashboard() -> Table:
             s.last_action[:35] if s.last_action else "",
             str(s.jobs_applied),
             str(s.jobs_failed),
-            f"${s.total_cost:.3f}" if s.total_cost else "",
+            tokens_text,
         )
         total_applied += s.jobs_applied
         total_failed += s.jobs_failed
-        total_cost += s.total_cost
+        total_in += s.input_tokens
+        total_out += s.output_tokens
 
     # Totals row
+    total_tokens = f"{_fmt_tokens(total_in)}/{_fmt_tokens(total_out)}" if (total_in or total_out) else ""
     table.add_section()
     table.add_row(
         "", "", "", "", "", "TOTAL",
-        str(total_applied), str(total_failed), f"${total_cost:.3f}",
+        str(total_applied), str(total_failed), total_tokens,
         style="bold",
     )
 
@@ -194,10 +212,15 @@ def get_totals() -> dict[str, int | float]:
     """Compute aggregate totals across all workers.
 
     Returns:
-        Dict with keys: applied, failed, cost.
+        Dict with keys: applied, failed, cost, input_tokens, output_tokens.
     """
     with _lock:
         applied = sum(s.jobs_applied for s in _worker_states.values())
         failed = sum(s.jobs_failed for s in _worker_states.values())
         cost = sum(s.total_cost for s in _worker_states.values())
-    return {"applied": applied, "failed": failed, "cost": cost}
+        input_tokens = sum(s.input_tokens for s in _worker_states.values())
+        output_tokens = sum(s.output_tokens for s in _worker_states.values())
+    return {
+        "applied": applied, "failed": failed, "cost": cost,
+        "input_tokens": input_tokens, "output_tokens": output_tokens,
+    }

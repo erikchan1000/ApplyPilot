@@ -47,24 +47,58 @@ SENIORITY FILTER (target: {seniority}, ~{yoe} years of experience):
 - Roles at the target seniority level or ambiguous titles (no explicit seniority prefix) should be scored normally on skills fit.
 """
 
+_SALARY_CLAUSE = """
+SALARY FILTER (candidate range: ${salary_min:,} – ${salary_max:,} USD/year):
+- If the job posting lists a salary range and its MAXIMUM is below ${salary_min:,}, score 3 or below regardless of skills fit.
+- If the salary range overlaps the candidate's range, score normally on skills fit.
+- If no salary is mentioned, ignore this filter and score normally.
+"""
+
+_LOCATION_CLAUSE = """
+LOCATION FILTER (candidate region: {location}):
+- If the job requires on-site or hybrid presence in a region OUTSIDE {location}, score 3 or below.
+- Remote roles, roles in {location}, or roles where location is not specified should be scored normally.
+"""
+
 
 def _build_score_prompt() -> str:
-    """Build the scoring system prompt, injecting seniority rules if configured."""
+    """Build the scoring system prompt, injecting seniority and salary rules if configured."""
     try:
         profile = load_profile()
     except FileNotFoundError:
         profile = {}
 
+    clauses: list[str] = []
+
     experience = profile.get("experience", {})
     seniority = experience.get("target_seniority", "")
     yoe = experience.get("years_of_experience_total", "")
-
     if seniority:
-        clause = _SENIORITY_CLAUSE.format(seniority=seniority, yoe=yoe or "?")
-    else:
-        clause = ""
+        clauses.append(_SENIORITY_CLAUSE.format(seniority=seniority, yoe=yoe or "?"))
 
-    return _SCORE_PROMPT_BASE.format(seniority_clause=clause)
+    compensation = profile.get("compensation", {})
+    salary_min = compensation.get("salary_range_min", "")
+    salary_max = compensation.get("salary_range_max", "")
+    if salary_min:
+        try:
+            clauses.append(_SALARY_CLAUSE.format(
+                salary_min=int(salary_min), salary_max=int(salary_max or salary_min),
+            ))
+        except (ValueError, TypeError):
+            pass
+
+    # Location clause from search config
+    try:
+        from applypilot.config import load_search_config
+        search_cfg = load_search_config()
+        locs = search_cfg.get("locations", [])
+        if locs:
+            region = locs[0]["location"].strip("'\"")
+            clauses.append(_LOCATION_CLAUSE.format(location=region))
+    except Exception:
+        pass
+
+    return _SCORE_PROMPT_BASE.format(seniority_clause="\n".join(clauses))
 
 
 def _parse_score_response(response: str) -> dict:
@@ -106,10 +140,12 @@ def score_job(resume_text: str, job: dict) -> dict:
     Returns:
         {"score": int, "keywords": str, "reasoning": str}
     """
+    salary = job.get('salary') or 'Not listed'
     job_text = (
         f"TITLE: {job['title']}\n"
         f"COMPANY: {job['site']}\n"
-        f"LOCATION: {job.get('location', 'N/A')}\n\n"
+        f"LOCATION: {job.get('location', 'N/A')}\n"
+        f"SALARY: {salary}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )
 

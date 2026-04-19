@@ -136,6 +136,62 @@ def _title_ok(title: str | None, exclude_patterns: list[str]) -> bool:
     return not any(pat in title_lower for pat in exclude_patterns)
 
 
+_REMOTE_KEYWORDS = ("remote", "anywhere", "work from home", "wfh", "distributed")
+
+_US_STATE_ABBREVS: dict[str, str] = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
+    "california": "ca", "colorado": "co", "connecticut": "ct", "delaware": "de",
+    "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+    "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks",
+    "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
+    "massachusetts": "ma", "michigan": "mi", "minnesota": "mn", "mississippi": "ms",
+    "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv",
+    "new hampshire": "nh", "new jersey": "nj", "new mexico": "nm", "new york": "ny",
+    "north carolina": "nc", "north dakota": "nd", "ohio": "oh", "oklahoma": "ok",
+    "oregon": "or", "pennsylvania": "pa", "rhode island": "ri", "south carolina": "sc",
+    "south dakota": "sd", "tennessee": "tn", "texas": "tx", "utah": "ut",
+    "vermont": "vt", "virginia": "va", "washington": "wa", "west virginia": "wv",
+    "wisconsin": "wi", "wyoming": "wy",
+}
+
+
+def _load_location_accept() -> list[str]:
+    """Load accepted location keywords from search config (state names, cities, etc.).
+
+    Automatically adds the two-letter US state abbreviation (e.g. "CA")
+    so locations like "Palo Alto, CA, USA" match when the config says "California".
+    """
+    try:
+        search_cfg = config.load_search_config()
+        explicit = search_cfg.get("location_accept")
+        if explicit:
+            raw = [s.lower() for s in explicit]
+        else:
+            locs = search_cfg.get("locations", [])
+            raw = [loc["location"].strip("'\"").lower() for loc in locs if loc.get("location")] if locs else []
+
+        expanded: list[str] = []
+        for term in raw:
+            expanded.append(term)
+            abbrev = _US_STATE_ABBREVS.get(term)
+            if abbrev:
+                expanded.append(f", {abbrev},")   # ", ca," matches "Palo Alto, CA, USA"
+                expanded.append(f", {abbrev} ")   # ", ca " edge case
+        return expanded
+    except Exception:
+        return []
+
+
+def _location_ok(location: str | None, accept: list[str]) -> bool:
+    """Return True if location is empty, remote, or matches an accepted region."""
+    if not location or not accept:
+        return True
+    loc = location.lower()
+    if any(kw in loc for kw in _REMOTE_KEYWORDS):
+        return True
+    return any(a in loc for a in accept)
+
+
 def acquire_job(target_url: str | None = None, min_score: int = 7,
                 worker_id: int = 0) -> dict | None:
     """Atomically acquire the next job to apply to.
@@ -150,6 +206,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
     """
     conn = get_connection()
     exclude_titles = _load_exclude_titles()
+    accept_locs = _load_location_accept()
     try:
         conn.execute("BEGIN IMMEDIATE")
 
@@ -203,6 +260,17 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
             )
             conn.commit()
             logger.info("Skipping excluded title: %s (%s)", row["title"], row["url"][:80])
+            return None
+
+        # Skip jobs whose location doesn't match the configured region
+        if not _location_ok(row["location"], accept_locs):
+            conn.execute(
+                "UPDATE jobs SET apply_status = 'skipped', apply_error = 'wrong location' WHERE url = ?",
+                (row["url"],),
+            )
+            conn.commit()
+            logger.info("Skipping wrong location: %s [%s] (%s)",
+                        row["title"], row["location"], row["url"][:80])
             return None
 
         # Skip manual ATS sites (unsolvable CAPTCHAs)
@@ -584,14 +652,26 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         cost = float(stats.get("cost_usd", 0) or 0)
         ws = get_state(worker_id)
         prev_cost = ws.total_cost if ws else 0.0
-        update_state(worker_id, total_cost=prev_cost + cost)
+        prev_in = ws.input_tokens if ws else 0
+        prev_out = ws.output_tokens if ws else 0
+        update_state(
+            worker_id,
+            total_cost=prev_cost + cost,
+            input_tokens=prev_in + stats.get("input_tokens", 0),
+            output_tokens=prev_out + stats.get("output_tokens", 0),
+        )
 
         def _clean_reason(s: str) -> str:
             return re.sub(r'[*`"]+$', '', s).strip()
 
+        from applypilot.apply.dashboard import _fmt_tokens
+        s_in = stats.get("input_tokens", 0)
+        s_out = stats.get("output_tokens", 0)
+        tok_label = f" [{_fmt_tokens(s_in)}/{_fmt_tokens(s_out)}]" if (s_in or s_out) else ""
+
         for result_status in ["APPLIED", "EXPIRED", "CAPTCHA", "LOGIN_ISSUE"]:
             if f"RESULT:{result_status}" in output:
-                add_event(f"[W{worker_id}] {result_status} ({elapsed}s): {job['title'][:30]}")
+                add_event(f"[W{worker_id}] {result_status} ({elapsed}s){tok_label}: {job['title'][:30]}")
                 update_state(worker_id, status=result_status.lower(),
                              last_action=f"{result_status} ({elapsed}s)")
                 return result_status.lower(), duration_ms
@@ -607,17 +687,17 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                     reason = _clean_reason(reason)
                     PROMOTE_TO_STATUS = {"captcha", "expired", "login_issue"}
                     if reason in PROMOTE_TO_STATUS:
-                        add_event(f"[W{worker_id}] {reason.upper()} ({elapsed}s): {job['title'][:30]}")
+                        add_event(f"[W{worker_id}] {reason.upper()} ({elapsed}s){tok_label}: {job['title'][:30]}")
                         update_state(worker_id, status=reason,
                                      last_action=f"{reason.upper()} ({elapsed}s)")
                         return reason, duration_ms
-                    add_event(f"[W{worker_id}] FAILED ({elapsed}s): {reason[:30]}")
+                    add_event(f"[W{worker_id}] FAILED ({elapsed}s){tok_label}: {reason[:30]}")
                     update_state(worker_id, status="failed",
                                  last_action=f"FAILED: {reason[:25]}")
                     return f"failed:{reason}", duration_ms
             return "failed:unknown", duration_ms
 
-        add_event(f"[W{worker_id}] NO RESULT ({elapsed}s)")
+        add_event(f"[W{worker_id}] NO RESULT ({elapsed}s){tok_label}")
         update_state(worker_id, status="failed", last_action=f"no result ({elapsed}s)")
         return "failed:no_result_line", duration_ms
 
@@ -921,9 +1001,15 @@ def main(limit: int = 1, target_url: str | None = None,
             live.update(render_full())
 
         totals = get_totals()
+        token_summary = ""
+        t_in = totals.get("input_tokens", 0)
+        t_out = totals.get("output_tokens", 0)
+        if t_in or t_out:
+            from applypilot.apply.dashboard import _fmt_tokens
+            token_summary = f" | tokens: {_fmt_tokens(t_in)} in / {_fmt_tokens(t_out)} out"
         console.print(
-            f"\n[bold]Done: {total_applied} applied, {total_failed} failed "
-            f"(${totals['cost']:.3f})[/bold]"
+            f"\n[bold]Done: {total_applied} applied, {total_failed} failed"
+            f"{token_summary}[/bold]"
         )
         console.print(f"Logs: {config.LOG_DIR}")
 

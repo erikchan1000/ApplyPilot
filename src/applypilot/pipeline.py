@@ -60,8 +60,8 @@ _UPSTREAM: dict[str, str | None] = {
 # ---------------------------------------------------------------------------
 
 def _run_discover(workers: int = 1) -> dict:
-    """Stage: Job discovery — JobSpy, Workday, and smart-extract scrapers."""
-    stats: dict = {"jobspy": None, "workday": None, "smartextract": None}
+    """Stage: Job discovery — JobSpy, Workday, Simplify, and smart-extract scrapers."""
+    stats: dict = {"jobspy": None, "workday": None, "simplify": None, "smartextract": None}
 
     # JobSpy
     console.print("  [cyan]JobSpy full crawl...[/cyan]")
@@ -84,6 +84,17 @@ def _run_discover(workers: int = 1) -> dict:
         log.error("Workday scraper failed: %s", e)
         console.print(f"  [red]Workday error:[/red] {e}")
         stats["workday"] = f"error: {e}"
+
+    # Simplify dedicated handler
+    console.print("  [cyan]Simplify.jobs scraper...[/cyan]")
+    try:
+        from applypilot.discovery.simplify import run_simplify_discovery
+        run_simplify_discovery()
+        stats["simplify"] = "ok"
+    except Exception as e:
+        log.error("Simplify scraper failed: %s", e)
+        console.print(f"  [red]Simplify error:[/red] {e}")
+        stats["simplify"] = f"error: {e}"
 
     # Smart extract
     console.print("  [cyan]Smart extract (AI-powered scraping)...[/cyan]")
