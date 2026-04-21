@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -140,6 +145,185 @@ def run(
 
     if result.get("errors"):
         raise typer.Exit(code=1)
+
+
+@app.command("tailor-job")
+def tailor_job(
+    job_file: Optional[Path] = typer.Argument(
+        None,
+        help="File containing the job description. If omitted, use --text or pipe stdin.",
+    ),
+    text: Optional[str] = typer.Option(
+        None,
+        "--text",
+        help="Job description text (for short snippets). Ignored if a file argument is given.",
+    ),
+    job_title: str = typer.Option(
+        "Target role",
+        "--job-title",
+        help="Job title passed to the tailoring model.",
+    ),
+    company: str = typer.Option(
+        "Company",
+        "--company",
+        "-c",
+        help="Company name passed to the tailoring model.",
+    ),
+    location: str = typer.Option("", "--location", "-l", help="Job location (optional)."),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write tailored resume to this file. If omitted, print to stdout.",
+    ),
+    resume: Optional[Path] = typer.Option(
+        None,
+        "--resume",
+        help="Base resume .txt path. Defaults to your configured resume from applypilot init.",
+    ),
+    pdf: bool = typer.Option(
+        False,
+        "--pdf",
+        help="Render the tailored resume to PDF (Playwright/Chromium). Uses --output path or saves under ~/.applypilot/tailored_resumes/.",
+    ),
+    pdf_out: Optional[Path] = typer.Option(
+        None,
+        "--pdf-out",
+        help="Explicit path for the PDF. Default: same path as the text output with a .pdf extension.",
+    ),
+    validation: str = typer.Option(
+        "normal",
+        "--validation",
+        help=(
+            "Validation strictness for tailoring: strict, normal (default), or lenient "
+            "(same as applypilot run)."
+        ),
+    ),
+) -> None:
+    """Tailor your resume to a job description (file, --text, or stdin)."""
+    from applypilot.config import (
+        PROFILE_PATH,
+        RESUME_PATH,
+        TAILORED_DIR,
+        check_tier,
+        ensure_dirs,
+        load_env,
+        load_profile,
+    )
+
+    load_env()
+    ensure_dirs()
+    check_tier(2, "Resume tailoring")
+
+    valid_modes = ("strict", "normal", "lenient")
+    if validation not in valid_modes:
+        console.print(
+            f"[red]Invalid --validation value:[/red] '{validation}'. "
+            f"Choose from: {', '.join(valid_modes)}"
+        )
+        raise typer.Exit(code=1)
+
+    if not PROFILE_PATH.exists():
+        console.print(
+            "[red]Profile not found.[/red]\n"
+            "Run [bold]applypilot init[/bold] to create your profile first."
+        )
+        raise typer.Exit(code=1)
+
+    base_resume = resume if resume is not None else RESUME_PATH
+    if not base_resume.exists():
+        console.print(
+            f"[red]Base resume not found:[/red] {base_resume}\n"
+            "Run [bold]applypilot init[/bold] or pass [bold]--resume[/bold] PATH."
+        )
+        raise typer.Exit(code=1)
+
+    if job_file is not None:
+        jd = Path(job_file).expanduser().read_text(encoding="utf-8")
+    elif text is not None:
+        jd = text
+    else:
+        if sys.stdin.isatty():
+            console.print(
+                "[red]No job description provided.[/red]\n"
+                "Use a [bold]FILE[/bold] argument, [bold]--text[/bold], or pipe stdin, e.g.:\n"
+                "  [dim]applypilot tailor-job role.txt -o out.txt[/dim]\n"
+                "  [dim]type jd.txt | applypilot tailor-job -o out.txt[/dim]"
+            )
+            raise typer.Exit(code=1)
+        jd = sys.stdin.read()
+
+    if not jd.strip():
+        console.print("[red]Job description is empty.[/red]")
+        raise typer.Exit(code=1)
+
+    want_pdf = pdf or pdf_out is not None
+
+    from applypilot.scoring.pdf import convert_to_pdf
+    from applypilot.scoring.tailor import tailor_resume
+
+    profile = load_profile()
+    resume_text = Path(base_resume).expanduser().read_text(encoding="utf-8")
+
+    job = {
+        "title": job_title,
+        "site": company,
+        "location": location or "N/A",
+        "full_description": jd,
+        "url": "adhoc://tailor-job",
+    }
+
+    console.print("[dim]Tailoring resume…[/dim]")
+    tailored, report = tailor_resume(
+        resume_text, job, profile, validation_mode=validation
+    )
+
+    if not tailored.strip():
+        console.print("[red]Tailoring produced empty output.[/red]")
+        raise typer.Exit(code=1)
+
+    out_path: Path | None
+    if output is not None:
+        out_path = Path(output).expanduser()
+    elif want_pdf:
+
+        def _safe_segment(s: str, max_len: int = 36) -> str:
+            t = re.sub(r"[^\w\s-]", "", s)[:max_len].strip().replace(" ", "_")
+            return t or "tailored"
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        prefix = f"{_safe_segment(company)}_{_safe_segment(job_title)}_{stamp}"
+        TAILORED_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = TAILORED_DIR / f"{prefix}.txt"
+        console.print(f"[dim]Saving tailored text for PDF:[/dim] {out_path}")
+    else:
+        out_path = None
+
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(tailored, encoding="utf-8")
+        report_path = out_path.with_name(f"{out_path.stem}_REPORT.json")
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        console.print(f"[green]Wrote[/green] {out_path}")
+        console.print(f"[green]Wrote[/green] {report_path}")
+        if want_pdf:
+            try:
+                pdf_path = convert_to_pdf(
+                    out_path,
+                    output_path=Path(pdf_out).expanduser() if pdf_out is not None else None,
+                )
+                console.print(f"[green]Wrote[/green] {pdf_path}")
+            except Exception as exc:
+                log.warning("PDF generation failed: %s", exc)
+                console.print(f"[yellow]PDF generation failed:[/yellow] {exc}")
+    else:
+        console.print(tailored)
+
+    status = report.get("status", "")
+    if status not in ("approved", "approved_with_judge_warning"):
+        console.print(
+            f"[yellow]Note:[/yellow] Tailoring status was [bold]{status}[/bold] — review the output."
+        )
 
 
 @app.command()
