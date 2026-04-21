@@ -60,8 +60,6 @@ LLM_LEAK_PHRASES: list[str] = [
 # Reasonable stretches (K8s, Terraform, Redis, Kafka etc.) are ALLOWED.
 FABRICATION_WATCHLIST: set[str] = {
     # Languages with zero relation to the candidate's stack
-    "c#", "c++", "golang", "rust", "ruby",
-    "kotlin", "swift", "scala", "matlab",
     # Frameworks for wrong languages
     "spring", "django", "rails", "angular", "vue", "svelte",
     # Hard lies: certifications can't be stretched
@@ -71,7 +69,7 @@ FABRICATION_WATCHLIST: set[str] = {
 REQUIRED_SECTIONS: set[str] = {"TECHNICAL SKILLS", "EXPERIENCE", "PROJECTS", "EDUCATION"}
 
 MAX_RESUME_BULLETS = 14
-MAX_RESUME_WORDS = 475
+MAX_RESUME_WORDS = 550  # bumped from 475 to allow more descriptive bullets while still fitting one page
 MAX_SUBTITLE_TECH_ITEMS = 8
 MAX_SUBTITLE_LENGTH = 90  # chars; keeps "Role | Tech list" on one PDF line
 

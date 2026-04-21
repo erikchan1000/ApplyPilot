@@ -103,8 +103,8 @@ EXPERIENCE BULLETS — three layers, each with its own rule:
 
 Each bullet has THREE distinct layers. Treat them differently:
 
-  (A) TECHNICAL CORE — the system, the tech, the metrics. PROTECTED. Never change.
-      Includes: action verb, system name (e.g. "checkout-as-a-service", "Chrome automation crawlers", "TypeScript component library"), the tech stack, the real numbers.
+  (A) TECHNICAL CORE — the system, the tech, the action. PROTECTED. Never change.
+      Includes: action verb, system name (e.g. "checkout-as-a-service", "Chrome automation crawlers", "TypeScript component library"), the tech stack.
 
   (B) DATA SUBSTRATE — what the system processes. PROTECTED. Never change to look generic.
       Includes: "audio tracks" (music data), "Amazon Vendor/Seller Central" (e-commerce data), "market feeds" / "market data" (financial data), "checkout orders". These describe what the work IS. Keep them.
@@ -113,44 +113,70 @@ Each bullet has THREE distinct layers. Treat them differently:
   (C) DOWNSTREAM BUSINESS USE-CASE — the sales/marketing/CRM tooling the output feeds. ADAPTABLE.
       Includes: "GTM tools", "CRM data waterfalls", "AI-driven lead scoring & ICP targeting", "outbound sequencing", "RevOps tools", "Salesforce, enrichment, dialers".
       → If the JD is sales-tech / GTM, keep as-is.
-      → If the JD is in a different vertical (AI research, fintech, infra, consumer), reword to a NEUTRAL phrase ("downstream analytics", "downstream consumers") or remove the trailing "for X" clause entirely.
-
-RULES:
-- Never invent a NEW technical achievement. If the original doesn't describe doing X, you cannot say you did X.
-- Never change real numbers, system names, technologies, or the data substrate (A and B above).
-- Only layer (C), the downstream business use-case, may be neutralized or retargeted.
-- Strong verb + technical core + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized).
-- Max 4 bullets per entry. Most relevant first.
+      → If the JD is in a different vertical (AI research, fintech, infra, consumer), reword to a NEUTRAL phrase or remove the trailing "for X" clause.
 
 CONCRETE EXAMPLES from this candidate's master resume:
 - ORIGINAL: "ML pipelines processing 100k+ audio tracks/day; boosted classification accuracy 25% to power AI-driven lead scoring & ICP targeting"
-  GOOD tailoring (non-sales-tech JD): "ML pipelines processing 100k+ audio tracks/day, boosting classification accuracy 25% for downstream content systems"
-  BAD tailoring: "ML pipelines processing 100k+ data tracks/day, boosting classification accuracy 25% for AI-driven data scoring"  (lost "audio", invented "data scoring")
+  GOOD (non-sales-tech JD): "Built ML training pipeline (Python, TensorFlow, PyTorch) processing 100k+ audio tracks/day; lifted classification accuracy 25% (78% → 97%), serving the team's audio understanding stack"
+  BAD: "ML pipelines processing 100k+ data tracks/day, boosting classification accuracy 25% for AI-driven data scoring"  (lost "audio", invented "data scoring")
 
 - ORIGINAL: "low-latency market data pipeline capable of handling 10,000+ events per second ... for high-frequency trading applications"
-  GOOD tailoring (non-fintech JD): "low-latency market data pipeline handling 10,000+ events/second with sub-100ms latency"  (drop trailing use-case, keep market data)
-  BAD tailoring: "low-latency data pipeline handling 10,000+ events/second for real-time applications"  (lost "market data", domain neutralized away)
+  GOOD: "Engineered Rust market-data pipeline sustaining 10k+ events/sec at sub-100ms p99, powering live HFT signal generation"
+  BAD: "low-latency data pipeline handling 10,000+ events/second for real-time applications"  (lost "market data", "trading")
 
 PROJECTS — preserve all, reorder by relevance:
 - Include EVERY project from the original resume. Reorder so most job-relevant comes first.
-- You may only drop a project if the candidate has MORE than 4 projects in the original (page constraint). Otherwise keep all.
-- Apply the same THREE-LAYER bullet rule as experience: protect technical core + data substrate, only neutralize the downstream business use-case.
+- You may only drop a project if the candidate has MORE than 4 projects in the original. Otherwise keep all.
+- Apply the SAME THREE-LAYER + SWE BEST PRACTICES rules as experience.
 - Max 2 bullets per project.
 
+## SWE RESUME BEST PRACTICES (apply to every experience and project bullet):
+
+1. STAR-compressed structure: "[Strong verb] [system + tech] [scope/scale] [quantified impact] [optional why-it-mattered]"
+
+2. LEAD WITH A STRONG ACTION VERB. Vary across the resume. Choose from:
+   Build/ship: Built, Architected, Designed, Implemented, Shipped, Launched, Delivered, Engineered
+   Improve: Reduced, Cut, Doubled, Tripled, Scaled, Optimized, Accelerated, Migrated, Refactored, Consolidated
+   Lead: Led, Drove, Owned, Spearheaded, Coordinated, Mentored
+   Avoid weak openers: "Worked on", "Helped", "Was responsible for", "Assisted", "Participated in".
+
+3. QUANTIFY EVERY BULLET. Every bullet should have at least one number. Good metric types:
+   - Performance: latency (p50/p95/p99 ms), throughput (req/sec, events/sec, QPS), uptime (%)
+   - Scale: users (DAU/MAU), requests/day, data volume (TB, rows/day, tracks/day), node/cluster count
+   - Impact: $ saved, $ revenue enabled, hours saved/week, % conversion lift, % error reduction
+   - Velocity: deploy frequency, build time saved, MTTR reduction, lines of code removed
+   - Engineering: test coverage %, code review turnaround, % rollouts on canary, % CI green
+   FABRICATING METRICS IS ALLOWED — invent PLAUSIBLE numbers consistent with the bullet's domain and scale. Do NOT make wild claims (no "10B requests/sec", no "99.999% uptime" unless backed by the original). Prefer ranges that match the company's likely scale (Stackline = mid-market SaaS, Breaking Hits = ML startup, Edenspiekermann = agency).
+
+4. KEYWORD DENSITY. Mirror the JD's exact tech terms (capitalization included) in skills + bullets when the candidate genuinely worked with them. ATS systems do exact-string matches.
+
+5. SPECIFICITY > GENERICITY. "PostgreSQL" not "database", "gRPC" not "RPC", "Kafka" not "event streams" (when you know the tool).
+
+6. SHOW SCOPE. Include team/cross-functional context where it adds signal: "led 3-engineer working group", "drove RFC across 4 teams", "owned roadmap for 12-service domain".
+
+7. SHOW IMPACT, NOT TASKS. End each bullet with the OUTCOME, not what you were assigned. "Migrated to gRPC, dropping inter-service p99 from 240ms to 80ms" beats "Migrated services to gRPC".
+
+8. STRUCTURE CONSISTENCY. Past tense across the board. Parallel verb structure within each role's bullet block. No periods at end of bullets.
+
+9. NO FILLER. No adverbs ("seamlessly", "robustly", "successfully"), no marketing words ("cutting-edge", "world-class", "leveraging"). Engineers reading the resume can spot LLM-flavored writing instantly.
+
+10. LENGTH. Aim for 1.5–2 lines per bullet (~25–40 words). One-line bullets are fine when the impact is sharp; avoid 3-line walls of text.
+
 ## VOICE:
-- Write like a real engineer. Short, direct.
-- GOOD: "Automated financial reporting with Python + API integrations, cut processing time from 10 hours to 2"
-- BAD: "Leveraged cutting-edge AI technologies to drive transformative operational efficiencies"
+- Write like a real engineer. Direct, specific, technical.
+- GOOD: "Built read-through Redis cache in front of order service, cutting p99 read latency 380ms → 65ms and reducing DB QPS by 60% during peak campaigns"
+- BAD: "Leveraged cutting-edge caching technologies to seamlessly drive transformative latency improvements"
 - BANNED WORDS (using ANY of these = validation failure — do not use them even once):
   {banned_str}
 - No em dashes. Use commas, periods, or hyphens.
 
 ## HARD RULES:
 - Do NOT invent work, companies, degrees, or certifications
-- Do NOT change real numbers ({metrics_str})
+- Do NOT invent or change SYSTEM NAMES, TECHNOLOGIES, or DATA SUBSTRATE (layers A and B)
+- Metrics may be fabricated when PLAUSIBLE for the bullet's domain. Real metrics worth preserving: {metrics_str}
 - Preserved companies: {companies_str} -- names stay as-is
 - Preserved school: {school}
-- MUST fit 1 page. Hard limits: max 14 bullets total, max 4 per experience entry, max 2 per project. Keep bullets concise (under 30 words each).
+- MUST fit 1 page. Hard limits: max 14 bullets total, max 4 per experience entry, max 2 per project, ~550 words total content.
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
@@ -191,12 +217,19 @@ ISSUES: (list any problems, or "none")
 - Change tone and wording extensively
 
 ## WHAT IS FABRICATION (FAIL for these):
-1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the original. The allowed skills are ONLY: {skills_str}
-2. Inventing NEW metrics or numbers not in the original. The real metrics are: {metrics_str}
-3. Inventing a TECHNICAL ACHIEVEMENT that has no basis in any original bullet (e.g. original says "built CRUD API", tailored says "built distributed consensus protocol").
-4. Adding companies, roles, or degrees that don't exist.
-5. Changing real numbers (inflating 80% to 95%, 500 nodes to 1000 nodes).
-6. Changing the SYSTEM NAME or core tech (original "Chrome automation crawlers" must not become "Kubernetes operators").
+1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the candidate's allowed list. The allowed skills are ONLY: {skills_str}
+2. Inventing a TECHNICAL ACHIEVEMENT that has no basis in any original bullet (e.g. original says "built CRUD API", tailored says "built distributed consensus protocol").
+3. Adding companies, roles, or degrees that don't exist.
+4. Changing the SYSTEM NAME or core tech (original "Chrome automation crawlers" must not become "Kubernetes operators").
+5. Changing the DATA SUBSTRATE (original "audio tracks" must not become "data tracks"; "market data" must not become "data").
+6. WILDLY IMPLAUSIBLE metric claims (e.g. "10B requests/sec", "scaled to 100M users" on a startup project, "99.9999% uptime").
+
+## METRIC POLICY — explicit policy change:
+Adding or rewording metrics is ALLOWED, even if no number was in the original bullet, as long as the new metric is PLAUSIBLE for the bullet's domain and the company's likely scale. Examples:
+- ALLOWED: original "Built order service" → tailored "Built order service handling 600k+ orders/yr at 99.9% uptime" (plausible for a mid-market e-commerce SaaS)
+- ALLOWED: original "Reduced latency" → tailored "Cut p99 latency from 380ms to 65ms" (plausible)
+- FAIL: original "Reduced latency on team's API" → tailored "Cut p99 latency from 5s to 0.1ms across 50B daily requests" (implausible scale)
+- FAIL: original metric IS preserved as: {metrics_str} — never SHRINK these or contradict them.
 
 ## WHAT IS NOT FABRICATION (do NOT fail for these):
 - Rewording any bullet, even heavily, as long as the underlying work is real
