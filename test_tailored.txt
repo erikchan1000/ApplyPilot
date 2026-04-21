@@ -1,0 +1,41 @@
+Erik Chan
+Full-Stack Software Engineer
+erikchan1010@gmail.com | 9094381726 | https://github.com/erikchan1000 | https://www.linkedin.com/in/erikchan01/
+
+TECHNICAL SKILLS
+Languages: Python 3, TypeScript, JavaScript (ES6+), Go, Rust, Kotlin, Java, C++, C#, SQL
+Frameworks: React.js, Next.js, Node.js, Express, Flask, FastAPI, TensorFlow, PyTorch, Vue.js, React Native, Flutter
+DevOps & Infra: AWS, GCP, Docker, Kubernetes, CI/CD, Git
+Databases: Redis
+Tools: REST APIs, GraphQL, Kafka
+
+EXPERIENCE
+Full Stack Software Engineer at Stackline
+React, Node.js, AWS, GraphQL, Kafka, C#, Go | Jul 2024 - Present
+- Redesigned Amazon Vendor/Seller Central crawlers with Chrome automation & fault-tolerant state-machine, cutting erroneous crawls 40% and ensuring 100% webhook/API data integrity for downstream analytics
+- Architected high-availability checkout-as-a-service (600k+ orders/yr, 99.9% uptime) with exponential backoff, circuit breakers & autoscaling, patterns reused for data processing systems
+- Delivered timezone-aware campaign-management microservice automating 100k+ Amazon Ads ops/mo via idempotent REST/GraphQL APIs and Kafka event streams
+- Built parallel execution framework that 4x content-generation throughput, leveraged for downstream AI systems
+
+Founding Full Stack Engineer at Breaking Hits
+Python, TensorFlow, PyTorch, NumPy, Pandas | Oct 2023 - Jul 2024
+- Constructed ML pipelines (Python, TensorFlow, PyTorch) processing 100k+ audio tracks/day, boosting classification accuracy 25% for AI-driven content systems
+
+Full Stack Software Engineer at Edenspiekermann
+TypeScript, React Native, Next.js, AWS, GraphQL, Java, C++ | Mar 2023 - Sep 2023
+- Integrated REST/GraphQL APIs & observability monitoring across client data stacks, raising funnel data reliability for downstream data systems
+- Authored reusable TypeScript component library, cutting frontend build time 30% and accelerating v1 delivery of internal tooling
+
+PROJECTS
+AI Hedge Fund - LLM-powered Financial Analysis
+Flask, Next.js, LangChain, Pandas, NumPy
+- Built production financial data pipeline ingesting real-time market feeds from multiple cryptocurrency and equity exchanges with sub-second data freshness guarantees
+- Designed LLM-powered autonomous research agents automating complex financial analysis tasks, reducing manual research time by 10+ hours per week for data analysis workflows
+
+Real-Time Trading Infrastructure - Low-Latency Data Processing
+Python, Rust
+- Engineered low-latency market data pipeline handling 10,000+ events/second with sub-100ms processing latency for real-time data applications
+- Designed automated risk management system utilizing thin-book market-making strategies, cross-exchange arbitrage detection, and regime-switching models
+
+EDUCATION
+University of California, Riverside | Bachelor's

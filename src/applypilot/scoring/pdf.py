@@ -53,19 +53,26 @@ def parse_resume(text: str) -> dict:
             header_lines.append(stripped)
 
     name = header_lines[0] if len(header_lines) > 0 else ""
-    title = header_lines[1] if len(header_lines) > 1 else ""
-    # The header may have 3 or 4 lines depending on whether location is included
+    title = ""
     location = ""
     contact = ""
-    if len(header_lines) > 3:
-        location = header_lines[2]
-        contact = header_lines[3]
-    elif len(header_lines) > 2:
-        # Could be location or contact -- check for email/phone indicators
+
+    if len(header_lines) == 2:
+        # 2-line header: name + contact/title
+        if "@" in header_lines[1] or "|" in header_lines[1]:
+            contact = header_lines[1]
+        else:
+            title = header_lines[1]
+    elif len(header_lines) == 3:
+        title = header_lines[1]
         if "@" in header_lines[2] or "|" in header_lines[2]:
             contact = header_lines[2]
         else:
             location = header_lines[2]
+    elif len(header_lines) >= 4:
+        title = header_lines[1]
+        location = header_lines[2]
+        contact = header_lines[3]
 
     # Split body into sections by ALL-CAPS headers
     sections: dict[str, str] = {}
@@ -160,20 +167,38 @@ def parse_entries(text: str) -> list[dict]:
     return entries
 
 
-def _split_date(text: str) -> tuple[str, str]:
-    """Extract a trailing date range from a subtitle line.
+def _extract_date(text: str) -> tuple[str, str]:
+    """Extract a date range from a line, splitting on tab or trailing date pattern.
 
-    Looks for patterns like "Jul 2024 - Present" or "N/A" after a pipe.
+    Handles formats:
+      "Stackline | Seattle, WA\\tJul 2024 - Present"  → ("Stackline | Seattle, WA", "Jul 2024 - Present")
+      "Stackline\\tJul 2024 - Present"                → ("Stackline", "Jul 2024 - Present")
+      "Project Name | Python, Rust"                   → ("Project Name | Python, Rust", "")
 
     Returns:
-        (content, date) tuple. date is empty if no match found.
+        (content, date) tuple.
     """
-    if " | " not in text:
-        return text, ""
-    parts = text.rsplit(" | ", 1)
-    if _DATE_PATTERN.search(parts[1]):
-        return parts[0].strip(), parts[1].strip()
+    if "\t" in text:
+        parts = text.split("\t", 1)
+        if _DATE_PATTERN.search(parts[1]):
+            return parts[0].strip(), parts[1].strip()
+
+    m = _DATE_PATTERN.search(text)
+    if m:
+        before = text[:m.start()].rstrip(" |–—-\t")
+        return before.strip(), m.group(0).strip()
+
     return text, ""
+
+
+def _split_role_tech(subtitle: str) -> tuple[str, str]:
+    """Split 'Role | Tech1, Tech2, ...' into (role, tech_string)."""
+    if "|" in subtitle:
+        role, tech = subtitle.split("|", 1)
+        return role.strip(), tech.strip()
+    return subtitle.strip(), ""
+
+
 
 
 # ── HTML Template ────────────────────────────────────────────────────────
@@ -184,39 +209,75 @@ def _build_entry_html(entries: list[dict]) -> str:
     for e in entries:
         bullets = "".join(f"<li>{b}</li>" for b in e["bullets"])
 
-        # Split "Role at Company" into company (title line) and role (subtitle)
+
+
         title = e["title"]
-        company = ""
-        role = ""
+        subtitle = e["subtitle"]
+
         if " at " in title:
+            # Tailored format: title = "Role at Company", subtitle = "Tech | Date"
             role, company = title.rsplit(" at ", 1)
-
-        tech = ""
-        date = ""
-        if e["subtitle"]:
-            tech, date = _split_date(e["subtitle"])
-
-        if company:
-            # Line 1: Company ............ Date
+            tech, date = "", ""
+            if subtitle:
+                # Subtitle is "Tech1, Tech2, ... | Date" — date is after last pipe
+                sub_parts = subtitle.rsplit(" | ", 1)
+                if len(sub_parts) == 2 and _DATE_PATTERN.search(sub_parts[1]):
+                    tech, date = sub_parts[0].strip(), sub_parts[1].strip()
+                else:
+                    tech = subtitle
             date_span = f'<span class="date">{date}</span>' if date and date != "N/A" else ""
+            tech_part = f'<span class="entry-tech"> | {tech}</span>' if tech else ""
             title_html = (
                 f'<div class="entry-title">'
-                f'<span>{company}</span>'
+                f'<span><b>{company}</b></span>'
                 f'{date_span}'
                 f'</div>'
             )
-            # Line 2: Role | Tech
-            tech_part = f" | {tech}" if tech else ""
-            subtitle_html = f'<div class="entry-sub"><span><b>{role}</b>{tech_part}</span></div>'
-        else:
-            # Fallback for entries without " at " (e.g. projects)
-            # Strip descriptor after " - " (e.g. "Project Name - description")
-            project_name = title.split(" - ", 1)[0] if " - " in title else title
-            date_span = f'<span class="date">{date}</span>' if date and date != "N/A" else ""
-            tech_part = f'<span style="font-weight:normal"> | {tech}</span>' if tech else ""
+            subtitle_html = f'<div class="entry-sub"><b>{role}</b>{tech_part}</div>'
+
+        elif subtitle and ("\t" in title or _DATE_PATTERN.search(title)):
+            # Reference format: title = "Company\tDate", subtitle = "Role | Tech"
+            company_full, date = _extract_date(title)
+            # Split company/location: "Company | Location" → bold company, normal location
+            if " | " in company_full:
+                comp_name, comp_loc = company_full.split(" | ", 1)
+                company_html = f'<b>{comp_name}</b><span class="entry-loc"> | {comp_loc}</span>'
+            else:
+                company_html = f'<b>{company_full}</b>'
+            role, tech = _split_role_tech(subtitle)
+            date_span = f'<span class="date">{date}</span>' if date else ""
             title_html = (
                 f'<div class="entry-title">'
-                f'<span>{project_name}{tech_part}</span>'
+                f'<span>{company_html}</span>'
+                f'{date_span}'
+                f'</div>'
+            )
+            tech_part = f'<span class="entry-tech"> | {tech}</span>' if tech else ""
+            subtitle_html = f'<div class="entry-sub"><b>{role}</b>{tech_part}</div>'
+
+        else:
+            # Project entry: title may have "Name | Tech" or "Name - Descriptor"
+            name, date = _extract_date(title)
+            proj_name = name.split(" - ", 1)[0] if " - " in name else name
+            tech = ""
+            if " | " in proj_name:
+                proj_name, tech = proj_name.split(" | ", 1)
+            elif subtitle:
+                # Tailored project: subtitle = "Tech" or "Tech | Date" (LLM may also
+                # emit placeholders like "| N/A" or "| Project" — strip those silently).
+                sub_parts = subtitle.rsplit(" | ", 1)
+                if len(sub_parts) == 2 and _DATE_PATTERN.search(sub_parts[1]):
+                    tech, date = sub_parts[0].strip(), sub_parts[1].strip()
+                elif len(sub_parts) == 2:
+                    # Trailing chunk is a placeholder, not a real date — drop it
+                    tech = sub_parts[0].strip()
+                else:
+                    tech = subtitle.strip()
+            date_span = f'<span class="date">{date}</span>' if date and date != "N/A" else ""
+            tech_part = f'<span class="entry-tech"> | {tech}</span>' if tech else ""
+            title_html = (
+                f'<div class="entry-title">'
+                f'<span><b>{proj_name}</b>{tech_part}</span>'
                 f'{date_span}'
                 f'</div>'
             )
@@ -328,7 +389,7 @@ def build_html(resume: dict, profile: dict | None = None) -> str:
 <style>
 @page {{
     size: letter;
-    margin: 0.2in 0.6in;
+    margin: 0;
 }}
 * {{
     margin: 0;
@@ -338,20 +399,21 @@ def build_html(resume: dict, profile: dict | None = None) -> str:
 body {{
     font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
     font-size: 11pt;
-    line-height: 1.15;
+    line-height: 1.2;
     color: #000;
     max-width: 8.5in;
     margin: 0 auto;
-    padding: 0;
+    padding: 0.28in 0.6in;
 }}
 .header {{
     text-align: center;
     margin-bottom: 0;
 }}
 .name {{
-    font-size: 30pt;
+    font-size: 22pt;
     font-weight: 700;
     color: #000;
+    line-height: 1.1;
 }}
 .title {{
     font-size: 11pt;
@@ -364,80 +426,99 @@ body {{
     font-weight: 700;
 }}
 .contact {{
-    font-size: 12pt;
+    font-size: 10.5pt;
     color: #595959;
-    font-weight: 700;
+    font-weight: 400;
+    margin-top: 2pt;
 }}
 .contact a {{
-    color: #595959;
-    text-decoration: none;
+    color: #0563C1;
+    text-decoration: underline;
 }}
 .section {{
-    margin-top: 8pt;
+    margin-top: 7pt;
 }}
 .section-title {{
-    font-size: 14pt;
+    font-size: 12pt;
     font-weight: 700;
     color: #0D0D0D;
     text-transform: uppercase;
     border-bottom: 0.5pt solid #000;
-    padding-bottom: 1pt;
-    margin-bottom: 3pt;
+    padding-bottom: 2pt;
+    margin-bottom: 4pt;
+    letter-spacing: 0.5pt;
 }}
 .skill-row {{
     font-size: 11pt;
     margin: 0;
-    padding-left: 4pt;
-    line-height: 1.15;
+    line-height: 1.35;
 }}
 .skill-row + .skill-row {{
-    margin-top: 1pt;
+    margin-top: 2pt;
 }}
 .skill-cat {{
     font-weight: 700;
 }}
 .entry {{
-    margin-top: 3pt;
+    margin-top: 5pt;
     break-inside: avoid;
 }}
 .entry-title {{
-    font-weight: 700;
     font-size: 12pt;
     color: #0D0D0D;
     display: flex;
     justify-content: space-between;
+    line-height: 1.3;
+}}
+.entry-title b {{
+    font-weight: 700;
+}}
+.entry-loc {{
+    font-weight: 400;
+}}
+.entry-tech {{
+    font-weight: 400;
+    font-size: 11pt;
 }}
 .entry-title .date {{
     font-weight: 700;
+    font-size: 10.5pt;
     white-space: nowrap;
     margin-left: 12pt;
 }}
 .entry-sub {{
     font-size: 11pt;
     color: #000;
-    margin-top: 1pt;
+    margin-top: 2pt;
+    line-height: 1.3;
+}}
+.entry-sub b {{
+    font-weight: 700;
 }}
 ul {{
     margin-left: 0;
-    padding-left: 0.14in;
+    padding-left: 0.22in;
+    margin-top: 2pt;
     list-style-type: disc;
 }}
 li {{
     font-size: 11pt;
-    margin-top: 1pt;
+    margin-top: 2pt;
     padding-left: 2pt;
-    line-height: 1.15;
+    line-height: 1.3;
 }}
 .edu {{
-    font-size: 12pt;
+    font-size: 11pt;
     font-weight: 700;
     color: #0D0D0D;
     margin-top: 3pt;
     display: flex;
     justify-content: space-between;
+    line-height: 1.3;
 }}
 .edu .date {{
     font-weight: 700;
+    font-size: 10.5pt;
     white-space: nowrap;
     margin-left: 12pt;
 }}
@@ -476,6 +557,7 @@ def render_pdf(html: str, output_path: str) -> None:
             format="Letter",
             margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
             print_background=True,
+            prefer_css_page_size=True,
         )
         browser.close()
 

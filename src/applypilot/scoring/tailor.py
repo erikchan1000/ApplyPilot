@@ -87,13 +87,55 @@ You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, R
 
 TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
 
-SKILLS: Reorder each category so the job's must-haves appear first.
+SKILLS (PRESERVE THEN REORDER — never delete the candidate's real skills):
+- Include EVERY item from the SKILLS BOUNDARY above. Do not drop any.
+- Reorder within each category so job must-haves appear first.
+- You MAY add 1-2 closely related tools from the job description (Kubernetes if Docker, Terraform if AWS, Postgres if SQL) — only if they're a natural extension of the existing stack.
 
-Reframe EVERY bullet for this role. Same real work, different angle. Every bullet must be reworded. Never copy verbatim.
+SUBTITLE (tech list per experience/project entry — PRESERVE COUNT, REORDER, SWAP):
+- Start from the ORIGINAL subtitle's tech items. Keep the SAME number of items.
+- Reorder so job-relevant items come first.
+- You MAY swap an item only if a closely-related JD term exists in the SKILLS BOUNDARY (e.g. swap "MySQL" for "Postgres" if both are in your stack and JD wants Postgres). Otherwise keep the original item.
+- DO NOT add items that didn't exist in the original (other than the allowed swap).
+- DO NOT delete items unless the line absolutely cannot fit (max 90 chars total). Collapse cloud sub-services to parent vendor first ("AWS Lambda, AWS Redshift" → "AWS"), drop true duplicates, then trim from the LEAST relevant end as a last resort.
 
-PROJECTS: Reorder by relevance. Drop irrelevant projects entirely.
+EXPERIENCE BULLETS — three layers, each with its own rule:
 
-BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized). Most relevant first. Max 4 per section.
+Each bullet has THREE distinct layers. Treat them differently:
+
+  (A) TECHNICAL CORE — the system, the tech, the metrics. PROTECTED. Never change.
+      Includes: action verb, system name (e.g. "checkout-as-a-service", "Chrome automation crawlers", "TypeScript component library"), the tech stack, the real numbers.
+
+  (B) DATA SUBSTRATE — what the system processes. PROTECTED. Never change to look generic.
+      Includes: "audio tracks" (music data), "Amazon Vendor/Seller Central" (e-commerce data), "market feeds" / "market data" (financial data), "checkout orders". These describe what the work IS. Keep them.
+      DO NOT replace "audio tracks" with "data tracks", "market data" with "data", "Amazon Vendor Central" with "downstream systems".
+
+  (C) DOWNSTREAM BUSINESS USE-CASE — the sales/marketing/CRM tooling the output feeds. ADAPTABLE.
+      Includes: "GTM tools", "CRM data waterfalls", "AI-driven lead scoring & ICP targeting", "outbound sequencing", "RevOps tools", "Salesforce, enrichment, dialers".
+      → If the JD is sales-tech / GTM, keep as-is.
+      → If the JD is in a different vertical (AI research, fintech, infra, consumer), reword to a NEUTRAL phrase ("downstream analytics", "downstream consumers") or remove the trailing "for X" clause entirely.
+
+RULES:
+- Never invent a NEW technical achievement. If the original doesn't describe doing X, you cannot say you did X.
+- Never change real numbers, system names, technologies, or the data substrate (A and B above).
+- Only layer (C), the downstream business use-case, may be neutralized or retargeted.
+- Strong verb + technical core + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized).
+- Max 4 bullets per entry. Most relevant first.
+
+CONCRETE EXAMPLES from this candidate's master resume:
+- ORIGINAL: "ML pipelines processing 100k+ audio tracks/day; boosted classification accuracy 25% to power AI-driven lead scoring & ICP targeting"
+  GOOD tailoring (non-sales-tech JD): "ML pipelines processing 100k+ audio tracks/day, boosting classification accuracy 25% for downstream content systems"
+  BAD tailoring: "ML pipelines processing 100k+ data tracks/day, boosting classification accuracy 25% for AI-driven data scoring"  (lost "audio", invented "data scoring")
+
+- ORIGINAL: "low-latency market data pipeline capable of handling 10,000+ events per second ... for high-frequency trading applications"
+  GOOD tailoring (non-fintech JD): "low-latency market data pipeline handling 10,000+ events/second with sub-100ms latency"  (drop trailing use-case, keep market data)
+  BAD tailoring: "low-latency data pipeline handling 10,000+ events/second for real-time applications"  (lost "market data", domain neutralized away)
+
+PROJECTS — preserve all, reorder by relevance:
+- Include EVERY project from the original resume. Reorder so most job-relevant comes first.
+- You may only drop a project if the candidate has MORE than 4 projects in the original (page constraint). Otherwise keep all.
+- Apply the same THREE-LAYER bullet rule as experience: protect technical core + data substrate, only neutralize the downstream business use-case.
+- Max 2 bullets per project.
 
 ## VOICE:
 - Write like a real engineer. Short, direct.
@@ -112,7 +154,11 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
-{{"title":"Role Title","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
+SUBTITLE FORMAT:
+- Experience subtitle: "Tech1, Tech2, ... | Start - End"  (always include real dates)
+- Project subtitle: "Tech1, Tech2, ..."  ONLY. Do NOT append "| N/A", "| Project", or any placeholder when there is no real date.
+
+{{"title":"Role Title","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech only, no date","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
 
 
 def _build_judge_prompt(profile: dict) -> str:
@@ -139,7 +185,7 @@ ISSUES: (list any problems, or "none")
 ## CONTEXT -- what the tailoring engine was instructed to do (all of this is ALLOWED):
 - Change the title to match the target role
 - Reorder bullets and projects to put the most relevant first
-- Reframe bullets to use the job's language
+- Reword the INDUSTRY/USE-CASE framing of a bullet (e.g. "for GTM tools" → "for analytics teams" or removed)
 - Drop low-relevance bullets and replace with more relevant ones from other sections
 - Reorder the skills section to put job-relevant skills first
 - Change tone and wording extensively
@@ -147,9 +193,10 @@ ISSUES: (list any problems, or "none")
 ## WHAT IS FABRICATION (FAIL for these):
 1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the original. The allowed skills are ONLY: {skills_str}
 2. Inventing NEW metrics or numbers not in the original. The real metrics are: {metrics_str}
-3. Inventing work that has no basis in any original bullet (completely new achievements).
+3. Inventing a TECHNICAL ACHIEVEMENT that has no basis in any original bullet (e.g. original says "built CRUD API", tailored says "built distributed consensus protocol").
 4. Adding companies, roles, or degrees that don't exist.
 5. Changing real numbers (inflating 80% to 95%, 500 nodes to 1000 nodes).
+6. Changing the SYSTEM NAME or core tech (original "Chrome automation crawlers" must not become "Kubernetes operators").
 
 ## WHAT IS NOT FABRICATION (do NOT fail for these):
 - Rewording any bullet, even heavily, as long as the underlying work is real
@@ -432,7 +479,7 @@ def tailor_resume(
             continue
 
         # Layer 1: Validate JSON fields
-        validation = validate_json_fields(data, profile, mode=validation_mode)
+        validation = validate_json_fields(data, profile, mode=validation_mode, resume_text=resume_text)
         report["validator"] = validation
 
         if not validation["passed"]:

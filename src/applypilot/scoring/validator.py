@@ -72,6 +72,8 @@ REQUIRED_SECTIONS: set[str] = {"TECHNICAL SKILLS", "EXPERIENCE", "PROJECTS", "ED
 
 MAX_RESUME_BULLETS = 14
 MAX_RESUME_WORDS = 475
+MAX_SUBTITLE_TECH_ITEMS = 8
+MAX_SUBTITLE_LENGTH = 90  # chars; keeps "Role | Tech list" on one PDF line
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -97,6 +99,38 @@ def _term_allowed(term: str, allowed: set[str]) -> bool:
     return False
 
 
+def _extract_master_project_names(resume_text: str) -> list[str]:
+    """Extract project names from the master resume's PROJECTS section.
+
+    A project header is the line immediately after the PROJECTS heading
+    (and after each project's bullets), formatted like "Name | Tech stack".
+    Returns just the name part (before "|").
+    """
+    lines = resume_text.splitlines()
+    in_projects = False
+    names: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        upper = line.upper().strip()
+        if upper in ("PROJECTS", "PROJECT", "SIDE PROJECTS"):
+            in_projects = True
+            continue
+        if in_projects and upper in ("SKILLS", "EDUCATION", "TECHNICAL SKILLS", "WORK EXPERIENCE", "EXPERIENCE"):
+            break
+        if not in_projects:
+            continue
+        # Skip bullet lines (start with bullet/dash markers)
+        if line.startswith(("?", "-", "•", "*", "·")):
+            continue
+        # Header line: "Project Name | Tech stack" — keep just the name
+        name = line.split("|", 1)[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
 def sanitize_text(text: str) -> str:
     """Auto-fix common LLM output issues instead of rejecting."""
     text = text.replace(" \u2014 ", ", ").replace("\u2014", ", ")   # em dash -> comma
@@ -108,16 +142,18 @@ def sanitize_text(text: str) -> str:
 
 # ── JSON Field Validation ─────────────────────────────────────────────────
 
-def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dict:
+def validate_json_fields(data: dict, profile: dict, mode: str = "normal", resume_text: str = "") -> dict:
     """Validate individual JSON fields from an LLM-generated tailored resume.
 
     Args:
-        data:    Parsed JSON from the LLM (title, skills, experience, projects, education).
-        profile: User profile dict from load_profile().
-        mode:    Validation strictness — "strict", "normal", or "lenient".
-                 strict  → banned words are errors (trigger retries)
-                 normal  → banned words are warnings (no retry)
-                 lenient → banned words ignored entirely
+        data:        Parsed JSON from the LLM (title, skills, experience, projects, education).
+        profile:     User profile dict from load_profile().
+        mode:        Validation strictness — "strict", "normal", or "lenient".
+                     strict  → banned words are errors (trigger retries)
+                     normal  → banned words are warnings (no retry)
+                     lenient → banned words ignored entirely
+        resume_text: Optional master resume text. When provided, enables project
+                     preservation checks (drops are flagged unless master has 5+ projects).
 
     Returns:
         {"passed": bool, "errors": list[str], "warnings": list[str]}
@@ -145,6 +181,31 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
             if fake in skills_text and not _term_allowed(fake, allowed_skills):
                 errors.append(f"Fabricated skill: '{fake}'")
 
+        # Preservation: every item in skills_boundary must appear in the tailored skills.
+        # The LLM may reorder and add 1-2 closely related tools, but cannot delete.
+        # Match either the full name OR the parenthesized abbreviation
+        # (e.g. "Google Cloud Platform (GCP)" matches if "gcp" alone is present).
+        boundary = profile.get("skills_boundary", {})
+        missing_skills: list[str] = []
+        for items in boundary.values():
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                item_lc = item.lower().strip()
+                aliases = [item_lc]
+                # Pull out abbreviation in parens, e.g. "(gcp)" -> "gcp"
+                abbr_match = re.search(r"\(([^)]+)\)", item_lc)
+                if abbr_match:
+                    aliases.append(abbr_match.group(1).strip())
+                    aliases.append(re.sub(r"\s*\([^)]+\)", "", item_lc).strip())
+                if not any(alias and alias in skills_text for alias in aliases):
+                    missing_skills.append(item)
+        if missing_skills:
+            errors.append(
+                f"Skills section dropped {len(missing_skills)} item(s) from skills_boundary: "
+                f"{', '.join(missing_skills[:8])}. Reorder, do not delete."
+            )
+
     # Experience: preserved companies must be present (always enforced)
     resume_facts = profile.get("resume_facts", {})
     preserved_companies = resume_facts.get("preserved_companies", [])
@@ -161,11 +222,30 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
 
-    # Projects: collect bullets
+    # Projects: collect bullets + enforce preservation (when master resume provided)
     if isinstance(data["projects"], list):
         for entry in data["projects"]:
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
+
+        # Preservation: if the master resume has 4 or fewer projects, all must be kept.
+        # (LLM may only drop projects when the candidate has 5+ — page-fit constraint.)
+        if resume_text:
+            master_projects = _extract_master_project_names(resume_text)
+            if 0 < len(master_projects) <= 4:
+                tailored_headers = " || ".join(
+                    str(p.get("header", "")).lower() for p in data["projects"]
+                )
+                missing_projects = [
+                    name for name in master_projects
+                    if name.lower() not in tailored_headers
+                ]
+                if missing_projects:
+                    errors.append(
+                        f"Projects section dropped {len(missing_projects)} project(s): "
+                        f"{', '.join(missing_projects)}. Reorder, do not delete "
+                        f"(only allowed when master has 5+ projects)."
+                    )
 
     # Education: preserved school must be present (always enforced)
     preserved_school = resume_facts.get("preserved_school", "")
@@ -191,6 +271,27 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
                 errors.append(msg)
             else:  # normal
                 warnings.append(msg)
+
+    # 1-page guard: subtitle (tech list) must stay short to fit on one line
+    for section_name in ("experience", "projects"):
+        for entry in data.get(section_name, []) or []:
+            sub = str(entry.get("subtitle", "")).strip()
+            if not sub:
+                continue
+            # Strip trailing "| Date" before counting tech items
+            tech_part = sub.rsplit("|", 1)[0].strip() if "|" in sub else sub
+            tech_items = [t.strip() for t in tech_part.split(",") if t.strip()]
+            if len(tech_items) > MAX_SUBTITLE_TECH_ITEMS:
+                errors.append(
+                    f"{section_name} subtitle has {len(tech_items)} tech items "
+                    f"(max {MAX_SUBTITLE_TECH_ITEMS}); keep most relevant only. "
+                    f"Use parent vendor (e.g. 'AWS') instead of listing sub-services."
+                )
+            if len(sub) > MAX_SUBTITLE_LENGTH:
+                errors.append(
+                    f"{section_name} subtitle is {len(sub)} chars "
+                    f"(max {MAX_SUBTITLE_LENGTH}); shorten to fit one line."
+                )
 
     # 1-page guard: enforce bullet count and word budget
     total_bullets = len(all_text_parts)
