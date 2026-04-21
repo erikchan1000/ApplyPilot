@@ -130,6 +130,8 @@ def _parse_typesense_hits(data: dict, allowed_categories: set[str] | None = None
             locations = doc.get("locations") or []
             location = locations[0] if locations else None
 
+            apply_url = f"https://simplify.jobs/jobs/click/{job_id}"
+
             jobs.append({
                 "url": detail_url,
                 "title": title,
@@ -137,6 +139,7 @@ def _parse_typesense_hits(data: dict, allowed_categories: set[str] | None = None
                 "salary": salary,
                 "location": location,
                 "description": doc.get("description") or doc.get("summary"),
+                "application_url": apply_url,
             })
 
     if skipped_category:
@@ -426,20 +429,27 @@ def _store_jobs(
             title_filtered += 1
             continue
         desc = job.get("description")
+        app_url = job.get("application_url")
         try:
             conn.execute(
-                "INSERT INTO jobs (url, title, salary, description, location, site, strategy, discovered_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO jobs (url, title, salary, description, location, site, strategy, discovered_at, application_url) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (url, job.get("title"), job.get("salary"), desc,
-                 job.get("location"), job.get("company", "Simplify"), "simplify", now),
+                 job.get("location"), job.get("company", "Simplify"), "simplify", now, app_url),
             )
             new += 1
         except sqlite3.IntegrityError:
+            updates = []
+            params = []
             if desc:
-                conn.execute(
-                    "UPDATE jobs SET description = ? WHERE url = ? AND (description IS NULL OR description = '')",
-                    (desc, url),
-                )
+                updates.append("description = CASE WHEN description IS NULL OR description = '' THEN ? ELSE description END")
+                params.append(desc)
+            if app_url:
+                updates.append("application_url = CASE WHEN application_url IS NULL THEN ? ELSE application_url END")
+                params.append(app_url)
+            if updates:
+                params.append(url)
+                conn.execute(f"UPDATE jobs SET {', '.join(updates)} WHERE url = ?", params)
             existing += 1
 
     conn.commit()

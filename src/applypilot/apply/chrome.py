@@ -19,8 +19,16 @@ from applypilot import config
 logger = logging.getLogger(__name__)
 
 
+_MAX_PORT = 65535
+_PORT_HEADROOM = 100  # reserve ports for up to 100 workers
+
+
 def _resolve_base_cdp_port() -> int:
-    """Get the base CDP port from env with safe fallback."""
+    """Get the base CDP port from env with safe fallback.
+
+    Leaves headroom so that ``BASE_CDP_PORT + worker_id`` stays within
+    the valid port range (1024–65535) for up to ``_PORT_HEADROOM`` workers.
+    """
     raw = os.environ.get("APPLYPILOT_CDP_BASE_PORT")
     if not raw:
         return 9222
@@ -30,10 +38,13 @@ def _resolve_base_cdp_port() -> int:
         logger.warning("Invalid APPLYPILOT_CDP_BASE_PORT=%r; using 9222", raw)
         return 9222
 
-    if 1024 <= port <= 65535:
+    if 1024 <= port <= _MAX_PORT - _PORT_HEADROOM:
         return port
 
-    logger.warning("Out-of-range APPLYPILOT_CDP_BASE_PORT=%r; using 9222", raw)
+    logger.warning(
+        "APPLYPILOT_CDP_BASE_PORT=%r out of safe range (1024–%d); using 9222",
+        raw, _MAX_PORT - _PORT_HEADROOM,
+    )
     return 9222
 
 
@@ -316,6 +327,12 @@ def launch_chrome(worker_id: int, port: int | None = None,
     """
     if port is None:
         port = BASE_CDP_PORT + worker_id
+
+    if port > _MAX_PORT:
+        raise ValueError(
+            f"CDP port {port} (base {BASE_CDP_PORT} + worker {worker_id}) "
+            f"exceeds max port {_MAX_PORT}. Lower APPLYPILOT_CDP_BASE_PORT or reduce workers."
+        )
 
     profile_dir, actual_profile = setup_worker_profile(worker_id, chrome_profile=chrome_profile)
 

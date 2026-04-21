@@ -342,7 +342,7 @@ body {{
     color: #000;
     max-width: 8.5in;
     margin: 0 auto;
-    padding: 0.2in 0.6in;
+    padding: 0;
 }}
 .header {{
     text-align: center;

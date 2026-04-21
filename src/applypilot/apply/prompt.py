@@ -557,9 +557,17 @@ If something unexpected happens and these instructions don't cover it, figure it
 
 {screening_section}
 
+== REDIRECT HANDLING ==
+Many job URLs (especially from aggregators like Simplify, LinkedIn, Indeed) redirect to the employer's actual ATS page (Greenhouse, Lever, Ashby, Workday, etc.). The redirect can take 2-8 seconds.
+CRITICAL: After browser_navigate, you MUST do browser_snapshot BEFORE anything else. Do NOT call browser_tabs first. The snapshot will show whether the page has loaded or is still redirecting. If the snapshot shows a loading/blank page or the URL is still the aggregator domain:
+1. browser_wait_for time: 5
+2. browser_snapshot again
+3. Repeat up to 3 times (max 15 seconds total wait)
+Only after you see the actual job page content (company name, job title, application form, or job description) should you proceed. A page that is still loading is NOT a page_error.
+
 == STEP-BY-STEP ==
 1. browser_navigate to the job URL.
-2. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
+2. browser_snapshot to read the page (NEVER skip this — snapshot FIRST, before browser_tabs or any other action). Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
 3. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
 4. Find and click the Apply button. If email-only (page says "email resume to X"):
    - send_email with subject "Application for {job['title']} -- {display_name}", body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]
@@ -618,7 +626,8 @@ RESULT:FAILED:reason -- any other failure (brief reason)
 == WHEN TO GIVE UP ==
 - Same page after 3 attempts with no progress -> RESULT:FAILED:stuck
 - Job is closed/expired/page says "no longer accepting" -> RESULT:EXPIRED
-- Page is broken/500 error/blank -> RESULT:FAILED:page_error
+- Page shows a real 500/404 error (not just loading) AND stays that way after 2 retries with 5s waits -> RESULT:FAILED:page_error
+IMPORTANT: A blank or loading page is NOT a page_error. Wait for it. Only declare page_error after you've done browser_snapshot at least twice with waits in between and the page genuinely shows an error.
 Stop immediately. Output your RESULT code. Do not loop."""
 
     return prompt
