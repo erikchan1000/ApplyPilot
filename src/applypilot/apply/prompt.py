@@ -262,22 +262,38 @@ browser_evaluate function: () => {{{{
   if (!r.type && document.querySelector('script[src*="challenges.cloudflare.com"]')) {{{{
     r.type = 'turnstile_script_only'; r.note = 'Wait 3s and re-detect.';
   }}}}
+  // Enterprise probe: window.grecaptcha.enterprise exists, OR enterprise.js
+  // is loaded. Greenhouse, Stripe, OpenAI, AppLovin, etc. all use Enterprise.
+  // Sending a non-Enterprise CapSolver token to an Enterprise site = 428 reject.
+  const isEnt = !!(window.grecaptcha && window.grecaptcha.enterprise)
+    || !!document.querySelector('script[src*="recaptcha/enterprise.js"]');
   // 3. reCAPTCHA v3 (invisible, loaded via render= param)
   if (!r.type) {{{{
     const s = document.querySelector('script[src*="recaptcha"][src*="render="]');
     if (s) {{{{
       const m = s.src.match(/render=([^&]+)/);
-      if (m && m[1] !== 'explicit') {{{{ r.type = 'recaptchav3'; r.sitekey = m[1]; }}}}
+      if (m && m[1] !== 'explicit') {{{{
+        r.type = isEnt ? 'recaptchav3enterprise' : 'recaptchav3';
+        r.sitekey = m[1];
+        // Extract pageAction. v3 tokens are scored against the action string
+        // the page uses in grecaptcha.execute(key, {{action: '...'}}). Wrong
+        // action -> low score -> server rejects token.
+        try {{{{
+          const html = document.documentElement.outerHTML;
+          const am = html.match(/action\s*:\s*['"]([\w_-]+)['"]/);
+          if (am) r.pageAction = am[1];
+        }}}} catch(e) {{{{}}}}
+      }}}}
     }}}}
   }}}}
   // 4. reCAPTCHA v2 (checkbox or invisible)
   if (!r.type) {{{{
     const rc = document.querySelector('.g-recaptcha');
-    if (rc) {{{{ r.type = 'recaptchav2'; r.sitekey = rc.dataset.sitekey; }}}}
+    if (rc) {{{{ r.type = isEnt ? 'recaptchav2enterprise' : 'recaptchav2'; r.sitekey = rc.dataset.sitekey; }}}}
   }}}}
   if (!r.type && document.querySelector('script[src*="recaptcha"]')) {{{{
     const el = document.querySelector('[data-sitekey]');
-    if (el) {{{{ r.type = 'recaptchav2'; r.sitekey = el.dataset.sitekey; }}}}
+    if (el) {{{{ r.type = isEnt ? 'recaptchav2enterprise' : 'recaptchav2'; r.sitekey = el.dataset.sitekey; }}}}
   }}}}
   // 5. FunCaptcha (Arkose Labs)
   if (!r.type) {{{{
@@ -298,59 +314,55 @@ Result actions:
 - Any other type -> proceed to CAPTCHA SOLVE below.
 
 --- CAPTCHA SOLVE ---
-Three steps: createTask -> poll -> inject. Do each as a separate browser_evaluate call.
+Three steps: createTask -> poll -> inject.
 
-STEP 1 -- CREATE TASK (copy this exactly, fill in the 3 placeholders):
-browser_evaluate function: async () => {{{{
-  const r = await fetch('https://api.capsolver.com/createTask', {{{{
-    method: 'POST',
-    headers: {{{{'Content-Type': 'application/json'}}}},
-    body: JSON.stringify({{{{
-      clientKey: '{capsolver_key}',
-      task: {{{{
-        type: 'TASK_TYPE',
-        websiteURL: 'PAGE_URL',
-        websiteKey: 'SITE_KEY'
-      }}}}
-    }}}})
-  }}}});
-  return await r.json();
-}}}}
+CRITICAL: Many sites (Greenhouse, Lever, AppLovin, Stripe) block direct
+fetch() to api.capsolver.com via Content Security Policy. ALWAYS call
+CapSolver from the `bash` tool with curl, NOT from browser_evaluate. Only the
+final token injection runs in browser_evaluate.
+
+STEP 1 -- CREATE TASK (run with bash, NOT browser_evaluate):
+  curl -s -X POST https://api.capsolver.com/createTask \\
+    -H 'Content-Type: application/json' \\
+    -d '{{{{"clientKey":"{capsolver_key}","task":{{{{"type":"TASK_TYPE","websiteURL":"PAGE_URL","websiteKey":"SITE_KEY"}}}}}}}}'
 
 TASK_TYPE values (use EXACTLY these strings):
-  hcaptcha     -> HCaptchaTaskProxyLess
-  recaptchav2  -> ReCaptchaV2TaskProxyLess
-  recaptchav3  -> ReCaptchaV3TaskProxyLess
-  turnstile    -> AntiTurnstileTaskProxyLess
-  funcaptcha   -> FunCaptchaTaskProxyLess
+  hcaptcha              -> HCaptchaTaskProxyLess
+  recaptchav2           -> ReCaptchaV2TaskProxyLess
+  recaptchav2enterprise -> ReCaptchaV2EnterpriseTaskProxyLess
+  recaptchav3           -> ReCaptchaV3TaskProxyLess
+  recaptchav3enterprise -> ReCaptchaV3EnterpriseTaskProxyLess
+  turnstile             -> AntiTurnstileTaskProxyLess
+  funcaptcha            -> FunCaptchaTaskProxyLess
 
 PAGE_URL = the url from detect result. SITE_KEY = the sitekey from detect result.
-For recaptchav3: add "pageAction": "submit" to the task object (or the actual action found in page scripts).
+For recaptchav3 / recaptchav3enterprise: add "pageAction":"<action>" to the
+task. Use the `pageAction` from detect result if present; otherwise try
+"submit", "login", or "verify" in that order. Wrong action = low score = 428 reject.
+For recaptchav3enterprise: also add "minScore": 0.7.
 For turnstile: add "metadata": {{"action": "...", "cdata": "..."}} if those were in detect result.
 
-Response: {{"errorId": 0, "taskId": "abc123"}} on success.
+Response: {{{{"errorId": 0, "taskId": "abc123"}}}} on success.
 If errorId > 0 -> CAPTCHA SOLVE failed. Go to MANUAL FALLBACK.
 
-STEP 2 -- POLL (replace TASK_ID with the taskId from step 1):
-Loop: browser_wait_for time: 3, then run:
-browser_evaluate function: async () => {{{{
-  const r = await fetch('https://api.capsolver.com/getTaskResult', {{{{
-    method: 'POST',
-    headers: {{{{'Content-Type': 'application/json'}}}},
-    body: JSON.stringify({{{{
-      clientKey: '{capsolver_key}',
-      taskId: 'TASK_ID'
-    }}}})
-  }}}});
-  return await r.json();
-}}}}
+STEP 2 -- POLL (run with bash, NOT browser_evaluate; CSP blocks fetch):
+Loop: sleep 3, then run with bash:
+  curl -s -X POST https://api.capsolver.com/getTaskResult \\
+    -H 'Content-Type: application/json' \\
+    -d '{{{{"clientKey":"{capsolver_key}","taskId":"TASK_ID"}}}}'
 
-- status "processing" -> wait 3s, poll again. Max 10 polls (30s).
+- status "processing" -> sleep 3s, poll again. Max 10 polls (30s).
 - status "ready" -> extract token:
     reCAPTCHA: solution.gRecaptchaResponse
     hCaptcha:  solution.gRecaptchaResponse
     Turnstile: solution.token
 - errorId > 0 or 30s timeout -> MANUAL FALLBACK.
+
+CAPTCHA RETRY CEILING: Do NOT retry the same CAPTCHA more than 3 times. If the
+server keeps returning 428/403 after 3 fresh tokens, the page is doing
+additional bot detection (device fingerprinting, behavioral) that CapSolver
+cannot bypass. Stop, do NOT keep refilling the form, and emit FAILED with
+detail "captcha_enterprise_unsolvable".
 
 STEP 3 -- INJECT TOKEN (replace THE_TOKEN with actual token string):
 

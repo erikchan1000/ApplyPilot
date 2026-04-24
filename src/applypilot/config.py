@@ -218,7 +218,8 @@ DEFAULTS = {
     "max_apply_attempts": 3,
     "max_tailor_attempts": 5,
     "poll_interval": 60,
-    "apply_timeout": 300,
+    "apply_timeout": 300,  # legacy wall-clock; no longer enforced (kept for backwards compat)
+    "apply_inactivity_timeout": 180,  # kill agent if no stdout for this many seconds
     "viewport": "1920x1080",
 }
 

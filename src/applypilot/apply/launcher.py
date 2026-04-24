@@ -121,20 +121,25 @@ def _discover_cdp_ws_endpoint(port: int, timeout: float = 5.0) -> str | None:
     Returns the ws:// URL (e.g. `ws://127.0.0.1:9222/devtools/browser/<uuid>`)
     or None if discovery fails after `timeout` seconds.
     """
+    # Chrome 147+ binds CDP only to whichever host string was probed first and
+    # rejects the other (Host header check). `localhost` is the safer default
+    # because Chrome advertises its own ws URL with `localhost` in M147.
+    hosts = ("localhost", "127.0.0.1")
     deadline = time.time() + timeout
     last_err: Exception | None = None
     while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/json/version", timeout=2
-            ) as r:
-                info = json.loads(r.read())
-                ws = info.get("webSocketDebuggerUrl")
-                if ws:
-                    return ws
-        except (urllib.error.URLError, ConnectionError, OSError) as e:
-            last_err = e
-            time.sleep(0.3)
+        for host in hosts:
+            try:
+                with urllib.request.urlopen(
+                    f"http://{host}:{port}/json/version", timeout=2
+                ) as r:
+                    info = json.loads(r.read())
+                    ws = info.get("webSocketDebuggerUrl")
+                    if ws:
+                        return ws
+            except (urllib.error.URLError, ConnectionError, OSError) as e:
+                last_err = e
+        time.sleep(0.3)
     if last_err:
         logger.debug("CDP ws discovery failed on port %d: %s", port, last_err)
     return None
@@ -588,6 +593,19 @@ def run_job(job: dict, port: int, worker_id: int = 0,
     agent_error: str | None = None
     proc = None
 
+    # Inactivity guard. We don't enforce a wall-clock limit -- long forms
+    # (Greenhouse/Workday with 30+ fields) can legitimately take 10+ minutes.
+    # Instead, track time since the agent last emitted stdout. If it goes
+    # quiet for `inactivity_limit_s`, assume it's stuck (deadlocked tool,
+    # frozen network, infinite silent loop) and kill the process tree.
+    # Active retry/poll loops still emit "sleep, retry" lines so they reset
+    # the timer and won't trigger this watchdog.
+    inactivity_limit_s = config.DEFAULTS.get("apply_inactivity_timeout", 180)
+    timed_out = threading.Event()
+    stop_watchdog = threading.Event()
+    last_activity = [time.time()]  # list for cross-thread mutation
+    watchdog: threading.Thread | None = None
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -603,6 +621,21 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         with _agent_lock:
             _agent_procs[worker_id] = proc
 
+        def _watchdog(pid: int = proc.pid) -> None:
+            # Poll every 15s; kill if stdout has been silent for the limit.
+            while not stop_watchdog.wait(15):
+                if time.time() - last_activity[0] > inactivity_limit_s:
+                    timed_out.set()
+                    logger.warning(
+                        "[worker-%d] No agent output for %ds; killing agent (pid %d)",
+                        worker_id, inactivity_limit_s, pid,
+                    )
+                    _kill_process_tree(pid)
+                    return
+
+        watchdog = threading.Thread(target=_watchdog, daemon=True)
+        watchdog.start()
+
         proc.stdin.write(agent_prompt)
         proc.stdin.close()
 
@@ -611,6 +644,7 @@ def run_job(job: dict, port: int, worker_id: int = 0,
             lf.write(log_header)
 
             for line in proc.stdout:
+                last_activity[0] = time.time()
                 line = line.strip()
                 if not line:
                     continue
@@ -681,9 +715,16 @@ def run_job(job: dict, port: int, worker_id: int = 0,
                     text_parts.append(line)
                     lf.write(line + "\n")
 
-        proc.wait(timeout=300)
+        proc.wait()
         returncode = proc.returncode
         proc = None
+
+        if timed_out.is_set():
+            duration_ms = int((time.time() - start) * 1000)
+            elapsed = int(time.time() - start)
+            add_event(f"[W{worker_id}] INACTIVITY_TIMEOUT ({elapsed}s)")
+            update_state(worker_id, status="failed", last_action=f"INACTIVITY_TIMEOUT ({elapsed}s)")
+            return "failed:inactivity_timeout", duration_ms
 
         if returncode and returncode < 0:
             return "skipped", int((time.time() - start) * 1000)
@@ -765,6 +806,9 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         update_state(worker_id, status="failed", last_action=f"ERROR: {str(e)[:25]}")
         return f"failed:{str(e)[:100]}", duration_ms
     finally:
+        stop_watchdog.set()
+        if watchdog is not None:
+            watchdog.join(timeout=2)
         with _agent_lock:
             _agent_procs.pop(worker_id, None)
         if proc is not None and proc.poll() is None:

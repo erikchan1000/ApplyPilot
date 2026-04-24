@@ -248,13 +248,18 @@ def setup_worker_profile(worker_id: int, chrome_profile: str = "Default") -> tup
                 worker_id, source.name)
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy essential profile dirs -- skip caches and heavy transient data
+    # Copy essential profile dirs -- skip caches and heavy transient data.
+    # Sync/account files are also skipped so the worker can't reconnect to
+    # the user's Google account and bump their live Chrome session.
     skip = {
         "ShaderCache", "GrShaderCache", "Service Worker", "Cache",
         "Code Cache", "GPUCache", "CacheStorage", "Crashpad",
         "BrowserMetrics", "SafeBrowsing", "Crowd Deny",
         "MEIPreload", "SSLErrorAssistant", "recovery", "Temp",
         "SingletonLock", "SingletonSocket", "SingletonCookie",
+        "Sync Data", "Sync Extension Settings", "Sync App Settings",
+        "Account Web Data", "Login Data For Account",
+        "Account Web Data-journal", "Login Data For Account-journal",
     }
 
     for item in source.iterdir():
@@ -364,6 +369,14 @@ def launch_chrome(worker_id: int, port: int | None = None,
         "--use-fake-ui-for-media-stream",
         "--deny-permission-prompts",
         "--disable-notifications",
+        # Isolate from the user's Google account so the worker can't bump
+        # their live Chrome Sync session (see setup_worker_profile skip list).
+        "--disable-sync",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-domain-reliability",
+        "--disable-client-side-phishing-detection",
+        "--disable-features=ChromeWhatsNewUI,SigninInterceptBubbleV2,Translate",
     ]
     if headless:
         cmd.append("--headless=new")
