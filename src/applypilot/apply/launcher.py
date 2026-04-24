@@ -255,6 +255,11 @@ def acquire_job(target_url: str | None = None, min_score: int = 7,
     try:
         conn.execute("BEGIN IMMEDIATE")
 
+        # Defensive: reclaim any locks from workers that died without cleanup.
+        # Heartbeats keep live workers' rows fresh, so this only touches orphans.
+        # Don't commit -- we're inside the BEGIN IMMEDIATE acquire transaction.
+        reap_stale_locks(ACQUIRE_REAP_GRACE_S, conn=conn, commit=False)
+
         if target_url:
             like = f"%{target_url.split('?')[0].rstrip('/')}%"
             row = conn.execute("""
@@ -377,6 +382,49 @@ def release_lock(url: str) -> None:
         (url,),
     )
     conn.commit()
+
+
+# Default grace periods for the stale-lock reaper.
+# Live workers heartbeat `last_attempted_at` every 15s (see _watchdog in run_job),
+# so any in_progress row older than this is from a dead/orphaned process.
+STARTUP_REAP_GRACE_S = 300       # 5 min: catches orphans from previous runs
+ACQUIRE_REAP_GRACE_S = 1800      # 30 min: defensive sweep on every acquire
+
+
+def reap_stale_locks(grace_seconds: int = ACQUIRE_REAP_GRACE_S,
+                     conn=None, commit: bool = True) -> int:
+    """Release in_progress locks whose `last_attempted_at` is stale.
+
+    A "stale" lock indicates the worker that claimed the job died without
+    cleaning up (parent SIGKILL, OS crash, hardware reset). Live workers
+    refresh `last_attempted_at` every 15s via the watchdog thread, so any
+    in_progress row older than `grace_seconds` is genuinely orphaned.
+
+    Safe to call concurrently with active workers because:
+      - Heartbeats keep live jobs' timestamps fresh inside the grace window.
+      - The UPDATE is a single statement; sqlite serializes writes via WAL.
+
+    Args:
+        grace_seconds: Reclaim locks older than this many seconds.
+        conn: Optional connection; uses thread-local default otherwise.
+        commit: If False, leave the transaction open (for callers that
+            already started one with BEGIN IMMEDIATE).
+
+    Returns:
+        Number of locks released.
+    """
+    if conn is None:
+        conn = get_connection()
+    cutoff = (datetime.now(timezone.utc).timestamp() - grace_seconds)
+    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+    cursor = conn.execute("""
+        UPDATE jobs SET apply_status = NULL, agent_id = NULL
+        WHERE apply_status = 'in_progress'
+          AND (last_attempted_at IS NULL OR last_attempted_at < ?)
+    """, (cutoff_iso,))
+    if commit:
+        conn.commit()
+    return cursor.rowcount
 
 
 # ---------------------------------------------------------------------------
@@ -621,9 +669,24 @@ def run_job(job: dict, port: int, worker_id: int = 0,
         with _agent_lock:
             _agent_procs[worker_id] = proc
 
-        def _watchdog(pid: int = proc.pid) -> None:
-            # Poll every 15s; kill if stdout has been silent for the limit.
+        def _watchdog(pid: int = proc.pid, job_url: str = job["url"]) -> None:
+            # Poll every 15s. Two responsibilities:
+            #   1. Heartbeat: refresh last_attempted_at so reap_stale_locks()
+            #      doesn't reclaim this job from under us on long forms.
+            #   2. Inactivity kill: if stdout has been silent for the limit,
+            #      assume the agent is stuck and kill the process tree.
+            hb_conn = get_connection()  # thread-local; watchdog runs in its own thread
             while not stop_watchdog.wait(15):
+                try:
+                    hb_conn.execute(
+                        "UPDATE jobs SET last_attempted_at = ? "
+                        "WHERE url = ? AND apply_status = 'in_progress'",
+                        (datetime.now(timezone.utc).isoformat(), job_url),
+                    )
+                    hb_conn.commit()
+                except Exception as e:
+                    logger.debug("[worker-%d] heartbeat failed: %s", worker_id, e)
+
                 if time.time() - last_activity[0] > inactivity_limit_s:
                     timed_out.set()
                     logger.warning(
@@ -983,6 +1046,13 @@ def main(limit: int = 1, target_url: str | None = None,
 
     config.ensure_dirs()
     console = Console()
+
+    # Clean up orphaned in_progress locks from previous runs (parent crash,
+    # SIGKILL, etc). Safe at startup because no live worker has been running
+    # for more than STARTUP_REAP_GRACE_S seconds yet.
+    reaped = reap_stale_locks(STARTUP_REAP_GRACE_S)
+    if reaped:
+        console.print(f"[yellow]Reclaimed {reaped} orphaned job lock(s) from previous run[/yellow]")
 
     if refresh_chrome_profile:
         for i in range(workers):
