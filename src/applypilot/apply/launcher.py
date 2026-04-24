@@ -16,6 +16,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,15 +65,23 @@ if platform.system() != "Windows":
 # MCP config
 # ---------------------------------------------------------------------------
 
-def _make_mcp_config(cdp_port: int) -> dict:
-    """Build MCP config dict for a specific CDP port."""
+def _make_mcp_config(cdp_port: int, cdp_endpoint: str | None = None) -> dict:
+    """Build MCP config dict for a specific CDP port.
+
+    `cdp_endpoint` overrides the default `http://localhost:{port}`. Pass the
+    `webSocketDebuggerUrl` from `/json/version` (e.g. `ws://127.0.0.1:9222/...`)
+    to bypass Playwright's HTTP discovery step, which returns 502 on Chrome
+    M144+ even though direct GETs to `/json/version` return 200.
+    See: microsoft/playwright#40027 and the trailing-slash 502 reproduction.
+    """
+    endpoint = cdp_endpoint or f"http://localhost:{cdp_port}"
     return {
         "mcpServers": {
             "playwright": {
                 "command": "npx",
                 "args": [
                     "@playwright/mcp@latest",
-                    f"--cdp-endpoint=http://localhost:{cdp_port}",
+                    f"--cdp-endpoint={endpoint}",
                     f"--viewport-size={config.DEFAULTS['viewport']}",
                 ],
             },
@@ -83,9 +93,9 @@ def _make_mcp_config(cdp_port: int) -> dict:
     }
 
 
-def _make_opencode_config(cdp_port: int) -> dict:
+def _make_opencode_config(cdp_port: int, cdp_endpoint: str | None = None) -> dict:
     """Build OpenCode config with local MCP servers."""
-    mcp_servers = _make_mcp_config(cdp_port)["mcpServers"]
+    mcp_servers = _make_mcp_config(cdp_port, cdp_endpoint=cdp_endpoint)["mcpServers"]
     mcp: dict[str, dict] = {}
     for name, server in mcp_servers.items():
         mcp[name] = {
@@ -98,6 +108,36 @@ def _make_opencode_config(cdp_port: int) -> dict:
         "$schema": "https://opencode.ai/config.json",
         "mcp": mcp,
     }
+
+
+def _discover_cdp_ws_endpoint(port: int, timeout: float = 5.0) -> str | None:
+    """Read Chrome's webSocketDebuggerUrl from /json/version.
+
+    Workaround for the M144+ regression where Playwright's HTTP discovery hits
+    `/json/version/` with a trailing slash and gets back 502 from Chrome's
+    DevTools server -- even though direct GETs to the same URL return 200.
+    Returning the ws:// URL directly lets the MCP skip discovery entirely.
+
+    Returns the ws:// URL (e.g. `ws://127.0.0.1:9222/devtools/browser/<uuid>`)
+    or None if discovery fails after `timeout` seconds.
+    """
+    deadline = time.time() + timeout
+    last_err: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/json/version", timeout=2
+            ) as r:
+                info = json.loads(r.read())
+                ws = info.get("webSocketDebuggerUrl")
+                if ws:
+                    return ws
+        except (urllib.error.URLError, ConnectionError, OSError) as e:
+            last_err = e
+            time.sleep(0.3)
+    if last_err:
+        logger.debug("CDP ws discovery failed on port %d: %s", port, last_err)
+    return None
 
 
 def _describe_tool_action(tool_name: str, tool_input: dict) -> str:
@@ -451,14 +491,26 @@ def run_job(job: dict, port: int, worker_id: int = 0,
 
     agent_cli = config.get_auto_apply_cli_name()
 
-    # Write per-worker MCP config (for Claude compatibility/debugging)
+    # Discover the live ws:// endpoint to bypass Playwright's broken HTTP probe
+    # (see _discover_cdp_ws_endpoint). Falls back to http:// if discovery fails.
+    cdp_endpoint = _discover_cdp_ws_endpoint(port)
+    if not cdp_endpoint:
+        logger.warning("[worker-%d] Could not discover ws CDP endpoint on port %d; "
+                       "MCP may fail to connect on Chrome M144+", worker_id, port)
+
     mcp_config_path = config.APP_DIR / f".mcp-apply-{worker_id}.json"
-    mcp_config_path.write_text(json.dumps(_make_mcp_config(port)), encoding="utf-8")
+    mcp_config_path.write_text(
+        json.dumps(_make_mcp_config(port, cdp_endpoint=cdp_endpoint)),
+        encoding="utf-8",
+    )
 
     opencode_cfg_path: Path | None = None
     if agent_cli == "opencode":
         opencode_cfg_path = config.APP_DIR / f".opencode-apply-{worker_id}.json"
-        opencode_cfg_path.write_text(json.dumps(_make_opencode_config(port)), encoding="utf-8")
+        opencode_cfg_path.write_text(
+            json.dumps(_make_opencode_config(port, cdp_endpoint=cdp_endpoint)),
+            encoding="utf-8",
+        )
         cmd = [
             "opencode",
             "run",

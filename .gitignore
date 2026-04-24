@@ -5,6 +5,7 @@ resume.pdf
 *.env
 .env.*
 !.env.example
+.runs/
 
 # Runtime artifacts
 *.db
@@ -15,6 +16,7 @@ apply-workers/
 apply_logs/
 logs/
 test_tailored*
+*.log
 
 # MCP configs (per-machine)
 .mcp*.json

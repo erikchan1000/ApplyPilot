@@ -87,14 +87,14 @@ You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, R
 
 ## TAILORING RULES:
 
-TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
+TITLE: Set to the candidate's current title verbatim — DO NOT change to match the JD. The system overwrites this field anyway, so changing it wastes tokens and triggers retries.
 
-SKILLS (PRESERVE BREADTH — reorder freely, swap freely, never shrink the count):
-- Your skills section MUST list at least {boundary_count} comma-separated items in total (matching the SKILLS BOUNDARY count above). Fewer = automatic validation failure.
-- Reorder so job must-haves appear first within each category.
-- You MAY swap items clearly irrelevant to this JD for JD-relevant items that are closely related to the candidate's existing stack (e.g. swap "Flutter" for "Tailwind" if the JD wants Tailwind and there is no mobile work).
-- You MAY also add net-new closely related tools from the JD (Kubernetes if Docker, Terraform if AWS, Postgres if SQL).
-- Keep the categories balanced: do not pile every skill into one category.
+SKILLS (PRESERVE BREADTH — reorder freely, swap 1-for-1, never shrink the count):
+- DEFAULT (SAFEST) BEHAVIOR: copy ALL {boundary_count} items from the SKILLS BOUNDARY above verbatim, then reorder within each category so JD-relevant items appear first. This guarantees you pass validation. When in doubt, do this.
+- HARD FLOOR: the total count of comma-separated items across all categories MUST be ≥ {boundary_count}. Anything less = automatic validation failure and forced retry (wasted tokens). Count yourself before returning.
+- SWAP RULE (only if you really want to swap): if you delete one item, you MUST add a different item back in the SAME response. Never delete without replacing. Replacement items must be JD-relevant tools that are closely related to the candidate's existing stack (e.g. delete "Flutter", add "Tailwind" if the JD wants Tailwind and there is no mobile work in the JD).
+- ADD RULE: you MAY also add JD-relevant tools as net-new ABOVE the {boundary_count} floor if they're natural extensions (Kubernetes if Docker, Terraform if AWS, Postgres if SQL).
+- Keep the boundary's category structure when in doubt. Do not collapse categories or pile every skill into one bucket.
 
 SUBTITLE (tech list per experience/project entry — PRESERVE COUNT, REORDER, SWAP):
 - Start from the ORIGINAL subtitle's tech items. Keep the SAME number of items.
@@ -177,6 +177,7 @@ PROJECTS — preserve all, reorder by relevance:
 ## HARD RULES:
 - Do NOT invent work, companies, degrees, or certifications
 - Do NOT invent or change SYSTEM NAMES, TECHNOLOGIES, or DATA SUBSTRATE (layers A and B)
+- BULLET COUNT IS A CEILING, NOT A QUOTA: never exceed the ORIGINAL bullet count for any entry. If the original Breaking Hits entry had 1 bullet, your Breaking Hits entry must have AT MOST 1 bullet. Fewer is fine; padding to "fill space" with invented work is fabrication and will fail validation.
 - Metrics may be fabricated when PLAUSIBLE for the bullet's domain. Real metrics worth preserving: {metrics_str}
 - Preserved companies: {companies_str} -- names stay as-is
 - Preserved school: {school}
@@ -192,66 +193,46 @@ SUBTITLE FORMAT:
 
 
 def _build_judge_prompt(profile: dict) -> str:
-    """Build the LLM judge prompt from the user's profile."""
-    boundary = profile.get("skills_boundary", {})
+    """Build the LLM judge prompt from the user's profile.
+
+    The judge is intentionally narrow: it only catches outright lies that the
+    programmatic validator can't. Skills-boundary checks are handled by the
+    validator and are NOT duplicated here.
+    """
     resume_facts = profile.get("resume_facts", {})
-
-    # Flatten allowed skills for the judge
-    all_skills: list[str] = []
-    for items in boundary.values():
-        if isinstance(items, list):
-            all_skills.extend(items)
-    skills_str = ", ".join(all_skills) if all_skills else "N/A"
-
     real_metrics = resume_facts.get("real_metrics", [])
     metrics_str = ", ".join(real_metrics) if real_metrics else "N/A"
 
-    return f"""You are a resume quality judge. A tailoring engine rewrote a resume to target a specific job. Your job is to catch LIES, not style changes.
+    return f"""You are a resume quality judge. A tailoring engine rewrote a resume. Your ONLY job is to catch outright LIES — invented experiences, invented metrics that grew, invented projects/companies/degrees, swapped system identities. Style, wording, qualifier removal, and reordering are NEVER lies.
 
 You must answer with EXACTLY this format:
 VERDICT: PASS or FAIL
 ISSUES: (list any problems, or "none")
 
-## CONTEXT -- what the tailoring engine was instructed to do (all of this is ALLOWED):
-- Change the title to match the target role
-- Reorder bullets and projects to put the most relevant first
-- Reword the INDUSTRY/USE-CASE framing of a bullet (e.g. "for GTM tools" → "for analytics teams" or removed)
-- Drop low-relevance bullets and replace with more relevant ones from other sections
-- Reorder the skills section to put job-relevant skills first
-- Change tone and wording extensively
+## DEFAULT IS PASS. Only FAIL when you can quote a specific lie.
 
-## WHAT IS FABRICATION (FAIL for these):
-1. Adding tools, languages, or frameworks to TECHNICAL SKILLS that aren't in the candidate's allowed list. The allowed skills are ONLY: {skills_str}
-2. Inventing a TECHNICAL ACHIEVEMENT that has no basis in any original bullet (e.g. original says "built CRUD API", tailored says "built distributed consensus protocol").
-3. Adding companies, roles, or degrees that don't exist.
-4. Changing the SYSTEM NAME or core tech (original "Chrome automation crawlers" must not become "Kubernetes operators").
-5. Changing the DATA SUBSTRATE (original "audio tracks" must not become "data tracks"; "market data" must not become "data").
-6. WILDLY IMPLAUSIBLE metric claims (e.g. "10B requests/sec", "scaled to 100M users" on a startup project, "99.9999% uptime").
-
-## METRIC POLICY — explicit policy change:
-Adding or rewording metrics is ALLOWED, even if no number was in the original bullet, as long as the new metric is PLAUSIBLE for the bullet's domain and the company's likely scale. Examples:
-- ALLOWED: original "Built order service" → tailored "Built order service handling 600k+ orders/yr at 99.9% uptime" (plausible for a mid-market e-commerce SaaS)
-- ALLOWED: original "Reduced latency" → tailored "Cut p99 latency from 380ms to 65ms" (plausible)
-- FAIL: original "Reduced latency on team's API" → tailored "Cut p99 latency from 5s to 0.1ms across 50B daily requests" (implausible scale)
-- FAIL: original metric IS preserved as: {metrics_str} — never SHRINK these or contradict them.
-
-## WHAT IS NOT FABRICATION (do NOT fail for these):
+## WHAT IS *NOT* A LIE — DO NOT FAIL for any of these (read this list FIRST):
 - Rewording any bullet, even heavily, as long as the underlying work is real
-- Combining two original bullets into one
-- Splitting one original bullet into two
-- Describing the same work with different emphasis
-- Dropping bullets entirely
+- Combining two original bullets into one, or splitting one into two
+- Describing the same work with different emphasis or different verbs
+- Dropping low-relevance bullets, qualifier phrases, or trailing context
+  (e.g. "ensured 100% data integrity for downstream GTM tools" → "ensured 100% data integrity" is FINE — qualifier removal is not contradiction)
 - Reordering anything
-- Changing the title completely
+- Reframing the INDUSTRY/USE-CASE (e.g. "for sales tools" → "for analytics teams" or removed)
+- Adding or expanding a metric that doesn't exist in the original, AS LONG AS the new number is plausible for the company/role scale
+- Same metric with different wording (e.g. "600k+ orders/yr" appearing in both = NOT a contradiction)
+- Adding tools/skills to the SKILLS section — the validator already enforces the boundary; do not duplicate that check
 
-## TOLERANCE RULE:
-The goal is to get interviews, not to be a perfect fact-checker. Allow up to 3 minor stretches per resume:
-- Adding a closely related tool the candidate could realistically know is a MINOR STRETCH, not fabrication.
-- Reframing a metric with slightly different wording is a MINOR STRETCH.
-- Adding any LEARNABLE skill given their existing stack is a MINOR STRETCH.
-- Only FAIL if there are MAJOR lies: completely invented projects, fake companies, fake degrees, wildly inflated numbers, or skills from a completely different domain.
+## WHAT *IS* A LIE — FAIL only for these (must quote the exact problem):
+1. INVENTED EXPERIENCE: a bullet describes work the candidate did not do, with no plausible mapping to any original bullet (e.g. original "built CRUD API" → tailored "built distributed consensus protocol used by Fortune 500").
+2. METRIC INFLATION: a number that EXISTED in the original got LARGER in the tailored version (e.g. "100k tracks/day" → "10M tracks/day"), OR an invented number is wildly implausible for the company scale (e.g. "scaled to 100M users" on a startup, "99.9999% uptime", "10B req/sec").
+3. PRESERVED METRICS SHRUNK or CONTRADICTED: these specific numbers must never decrease or change: {metrics_str}.
+4. INVENTED ENTITIES: companies, schools, degrees, certifications that don't appear in the original.
+5. SWAPPED SYSTEM IDENTITY: the core tech or system name was changed (original "Chrome automation crawlers" must not become "Kubernetes operators").
+6. SWAPPED DATA SUBSTRATE: what the system processes was changed (original "audio tracks" must not become "generic data"; "market data" must not become "data feeds").
 
-Be strict about major lies. Be lenient about minor stretches and learnable skills. Do not fail for style, tone, or restructuring."""
+## RULE OF THUMB:
+If you have to argue with yourself about whether something is a lie, it isn't. Pass it. Only fail when you can point at a specific phrase and say "this is provably false". Style disagreements are not lies."""
 
 
 # ── JSON Extraction ───────────────────────────────────────────────────────
@@ -312,6 +293,60 @@ def _summarize_parse_failure(raw: str, err: Exception) -> dict:
     }
 
 
+# Maps boundary category keys (snake_case) → display category names used in
+# the LLM JSON output. Keep in sync with the SKILLS section of the prompt.
+_BOUNDARY_TO_DISPLAY_CATEGORY = {
+    "programming_languages": "Languages",
+    "frameworks": "Frameworks",
+    "tools": "Tools",
+}
+
+
+def _pad_skills_with_missing_boundary(data: dict, profile: dict) -> tuple[dict, list[str]]:
+    """Append any boundary skills the LLM dropped back into data['skills'].
+
+    `gpt-4o-mini` consistently under-counts skills on backend-heavy JDs (drops
+    Vue.js, React Native, Flutter without replacement) and burns retries that
+    never converge. This is a deterministic safety net: after the LLM responds,
+    we detect missing boundary items and append them to the matching display
+    category. The model's reordering and net-new additions are preserved.
+
+    Returns the (possibly mutated) data dict and a list of items that were
+    auto-padded (for diagnostics).
+    """
+    if not isinstance(data.get("skills"), dict):
+        return data, []
+
+    boundary = profile.get("skills_boundary", {})
+    present_text = " ".join(str(v) for v in data["skills"].values()).lower()
+    padded: list[str] = []
+
+    for boundary_cat, items in boundary.items():
+        if not isinstance(items, list):
+            continue
+        display_cat = _BOUNDARY_TO_DISPLAY_CATEGORY.get(
+            boundary_cat, boundary_cat.replace("_", " ").title()
+        )
+        missing: list[str] = []
+        for item in items:
+            item_lc = item.lower().strip()
+            aliases = [item_lc]
+            abbr = re.search(r"\(([^)]+)\)", item_lc)
+            if abbr:
+                aliases.append(abbr.group(1).strip())
+                aliases.append(re.sub(r"\s*\([^)]+\)", "", item_lc).strip())
+            if not any(a and a in present_text for a in aliases):
+                missing.append(item)
+        if missing:
+            existing = str(data["skills"].get(display_cat, "")).strip()
+            sep = ", " if existing else ""
+            data["skills"][display_cat] = f"{existing}{sep}{', '.join(missing)}"
+            padded.extend(missing)
+            present_text = " ".join(str(v) for v in data["skills"].values()).lower()
+
+    return data, padded
+
+
 # ── Resume Assembly (profile-driven header) ──────────────────────────────
 
 def assemble_resume_text(data: dict, profile: dict) -> str:
@@ -330,24 +365,38 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
     personal = profile.get("personal", {})
     lines: list[str] = []
 
-    # Header -- always code-injected from profile
+    # Header -- always code-injected from profile.
+    # Title is locked to current_title (no JD-driven changes); the LLM's "title"
+    # field is ignored, but kept in the JSON spec for backwards compatibility.
     lines.append(personal.get("full_name", ""))
-    lines.append(sanitize_text(data.get("title", "Software Engineer")))
+    locked_title = profile.get("experience", {}).get("current_title") or "Software Engineer"
+    lines.append(sanitize_text(locked_title))
 
     # Location from search config or profile -- leave blank if not available
     # The location line is optional; the original used a hardcoded city.
     # We omit it here; the LLM prompt can include it if the user sets it.
 
-    # Contact line
+    # Contact line — order matches the master resume layout:
+    # email | LinkedIn | GitHub | Website | phone | City, State
+    # pdf.py turns URLs into "LinkedIn"/"GitHub"/"Website" link labels at render time.
     contact_parts: list[str] = []
     if personal.get("email"):
         contact_parts.append(personal["email"])
-    if personal.get("phone"):
-        contact_parts.append(personal["phone"])
-    if personal.get("github_url"):
-        contact_parts.append(personal["github_url"])
     if personal.get("linkedin_url"):
         contact_parts.append(personal["linkedin_url"])
+    if personal.get("github_url"):
+        contact_parts.append(personal["github_url"])
+    website = personal.get("website_url") or personal.get("portfolio_url")
+    if website:
+        contact_parts.append(website)
+    if personal.get("phone"):
+        contact_parts.append(personal["phone"])
+    city = (personal.get("city") or "").strip()
+    state = (personal.get("province_state") or "").strip()
+    if city and state:
+        contact_parts.append(f"{city}, {state}")
+    elif city:
+        contact_parts.append(city)
     if contact_parts:
         lines.append(" | ".join(contact_parts))
     lines.append("")
@@ -517,6 +566,12 @@ def tailor_resume(
             else:
                 avoid_notes.append(f"Previous parse error: {details['error'][:120]}")
             continue
+
+        # Auto-pad any boundary skills the LLM dropped without replacement.
+        # Done before validation so the validator sees the corrected output.
+        data, padded = _pad_skills_with_missing_boundary(data, profile)
+        if padded:
+            report.setdefault("auto_padded_skills", []).extend(padded)
 
         # Layer 1: Validate JSON fields
         validation = validate_json_fields(data, profile, mode=validation_mode, resume_text=resume_text)
