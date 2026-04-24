@@ -179,29 +179,24 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal", resume
             if fake in skills_text and not _term_allowed(fake, allowed_skills):
                 errors.append(f"Fabricated skill: '{fake}'")
 
-        # Preservation: every item in skills_boundary must appear in the tailored skills.
-        # The LLM may reorder and add 1-2 closely related tools, but cannot delete.
-        # Match either the full name OR the parenthesized abbreviation
-        # (e.g. "Google Cloud Platform (GCP)" matches if "gcp" alone is present).
+        # Breadth check: the tailored skills section must list at least as many
+        # comma-separated items as the SKILLS BOUNDARY. The LLM may swap items
+        # irrelevant to the JD for JD-relevant ones, but cannot shrink total
+        # count -- that signals the candidate as less versatile.
         boundary = profile.get("skills_boundary", {})
-        missing_skills: list[str] = []
-        for items in boundary.values():
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                item_lc = item.lower().strip()
-                aliases = [item_lc]
-                # Pull out abbreviation in parens, e.g. "(gcp)" -> "gcp"
-                abbr_match = re.search(r"\(([^)]+)\)", item_lc)
-                if abbr_match:
-                    aliases.append(abbr_match.group(1).strip())
-                    aliases.append(re.sub(r"\s*\([^)]+\)", "", item_lc).strip())
-                if not any(alias and alias in skills_text for alias in aliases):
-                    missing_skills.append(item)
-        if missing_skills:
+        boundary_count = sum(
+            len(items) for items in boundary.values() if isinstance(items, list)
+        )
+        tailored_count = sum(
+            len([s for s in str(v).split(",") if s.strip()])
+            for v in data["skills"].values()
+        )
+        if tailored_count < boundary_count:
+            shortfall = boundary_count - tailored_count
             errors.append(
-                f"Skills section dropped {len(missing_skills)} item(s) from skills_boundary: "
-                f"{', '.join(missing_skills[:8])}. Reorder, do not delete."
+                f"Skills count is {tailored_count}, must be at least {boundary_count}. "
+                f"Add {shortfall} more comma-separated skill(s). Swapping irrelevant items "
+                f"for JD-relevant ones is fine; reducing total count is not."
             )
 
     # Experience: preserved companies must be present (always enforced)

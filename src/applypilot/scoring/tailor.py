@@ -46,10 +46,12 @@ def _build_tailor_prompt(profile: dict) -> str:
 
     # Format skills boundary for the prompt
     skills_lines = []
+    boundary_count = 0
     for category, items in boundary.items():
         if isinstance(items, list) and items:
             label = category.replace("_", " ").title()
             skills_lines.append(f"{label}: {', '.join(items)}")
+            boundary_count += len(items)
     skills_block = "\n".join(skills_lines)
 
     # Preserved entities
@@ -87,10 +89,12 @@ You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, R
 
 TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
 
-SKILLS (PRESERVE THEN REORDER — never delete the candidate's real skills):
-- Include EVERY item from the SKILLS BOUNDARY above. Do not drop any.
-- Reorder within each category so job must-haves appear first.
-- You MAY add 1-2 closely related tools from the job description (Kubernetes if Docker, Terraform if AWS, Postgres if SQL) — only if they're a natural extension of the existing stack.
+SKILLS (PRESERVE BREADTH — reorder freely, swap freely, never shrink the count):
+- Your skills section MUST list at least {boundary_count} comma-separated items in total (matching the SKILLS BOUNDARY count above). Fewer = automatic validation failure.
+- Reorder so job must-haves appear first within each category.
+- You MAY swap items clearly irrelevant to this JD for JD-relevant items that are closely related to the candidate's existing stack (e.g. swap "Flutter" for "Tailwind" if the JD wants Tailwind and there is no mobile work).
+- You MAY also add net-new closely related tools from the JD (Kubernetes if Docker, Terraform if AWS, Postgres if SQL).
+- Keep the categories balanced: do not pile every skill into one category.
 
 SUBTITLE (tech list per experience/project entry — PRESERVE COUNT, REORDER, SWAP):
 - Start from the ORIGINAL subtitle's tech items. Keep the SAME number of items.
@@ -477,8 +481,11 @@ def tailor_resume(
         # Fresh conversation every attempt
         prompt = tailor_prompt_base
         if avoid_notes:
-            prompt += "\n\n## AVOID THESE ISSUES (from previous attempt):\n" + "\n".join(
-                f"- {n}" for n in avoid_notes[-5:]
+            prompt += (
+                "\n\n## CRITICAL — YOUR PREVIOUS ATTEMPT FAILED VALIDATION.\n"
+                "Fix EACH of these specific issues before producing the new JSON. "
+                "These are not suggestions; the output will be rejected again if any remain:\n"
+                + "\n".join(f"- {n}" for n in avoid_notes[-5:])
             )
 
         messages = [
