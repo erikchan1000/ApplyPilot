@@ -18,6 +18,27 @@ _DATE_PATTERN = re.compile(
     r"|N/A)",
 )
 
+# Bullet glyphs we accept as list-item markers in the input text.
+# pdfplumber/pypdf usually emit ● (U+25CF) for filled-disc bullets;
+# tailored output may use • (U+2022); manual edits often use "- ".
+_BULLET_PREFIXES = ("- ", "\u2022 ", "\u25cf ")
+# Aliases so we can render a section regardless of which header label
+# the source resume uses (e.g. "EXPERIENCE" vs "WORK EXPERIENCE").
+_SECTION_ALIASES = {
+    "experience": ("EXPERIENCE", "WORK EXPERIENCE", "PROFESSIONAL EXPERIENCE"),
+    "projects": ("PROJECTS",),
+    "skills": ("TECHNICAL SKILLS", "SKILLS"),
+    "education": ("EDUCATION",),
+}
+
+
+def _section(sections: dict[str, str], group: str) -> str | None:
+    """Return the first matching section text for an alias group."""
+    for key in _SECTION_ALIASES[group]:
+        if key in sections:
+            return sections[key]
+    return None
+
 
 # ── Resume Parser ────────────────────────────────────────────────────────
 
@@ -43,9 +64,8 @@ def parse_resume(text: str) -> dict:
         if (
             stripped
             and stripped == stripped.upper()
-            and not stripped.startswith("-")
             and len(stripped) > 3
-            and not stripped.startswith("\u2022")
+            and not any(stripped.startswith(p[0]) for p in _BULLET_PREFIXES)
         ):
             body_start = i
             break
@@ -85,9 +105,8 @@ def parse_resume(text: str) -> dict:
         if (
             stripped
             and stripped == stripped.upper()
-            and not stripped.startswith("-")
             and len(stripped) > 3
-            and not stripped.startswith("\u2022")
+            and not any(stripped.startswith(p[0]) for p in _BULLET_PREFIXES)
         ):
             if current_section:
                 sections[current_section] = "\n".join(current_lines).strip()
@@ -143,12 +162,14 @@ def parse_entries(text: str) -> list[dict]:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped.startswith("- ") or stripped.startswith("\u2022 "):
+        bullet_prefix = next(
+            (p for p in _BULLET_PREFIXES if stripped.startswith(p)), None
+        )
+        if bullet_prefix:
             if current:
-                current["bullets"].append(stripped[2:].strip())
+                current["bullets"].append(stripped[len(bullet_prefix):].strip())
         elif current is None or (
-            not stripped.startswith("-")
-            and not stripped.startswith("\u2022")
+            bullet_prefix is None
             and len(current.get("bullets", [])) > 0
         ):
             # New entry
@@ -311,8 +332,9 @@ def build_html(resume: dict, profile: dict | None = None) -> str:
 
     # Skills — consolidate into Languages, Frameworks, Technologies
     skills_html = ""
-    if "TECHNICAL SKILLS" in sections:
-        skills = parse_skills(sections["TECHNICAL SKILLS"])
+    skills_text = _section(sections, "skills")
+    if skills_text:
+        skills = parse_skills(skills_text)
         keep = {"Languages", "Frameworks"}
         tech_values: list[str] = []
         rows = ""
@@ -328,15 +350,17 @@ def build_html(resume: dict, profile: dict | None = None) -> str:
 
     # Experience
     exp_html = ""
-    if "EXPERIENCE" in sections:
-        entries = parse_entries(sections["EXPERIENCE"])
+    exp_text = _section(sections, "experience")
+    if exp_text:
+        entries = parse_entries(exp_text)
         items = _build_entry_html(entries)
         exp_html = f'<div class="section"><div class="section-title">Experience</div>{items}</div>'
 
     # Projects
     proj_html = ""
-    if "PROJECTS" in sections:
-        entries = parse_entries(sections["PROJECTS"])
+    proj_text = _section(sections, "projects")
+    if proj_text:
+        entries = parse_entries(proj_text)
         items = _build_entry_html(entries)
         proj_html = f'<div class="section"><div class="section-title">Projects</div>{items}</div>'
 
@@ -347,14 +371,26 @@ def build_html(resume: dict, profile: dict | None = None) -> str:
     edu_end = edu_cfg.get("end_date", "")
 
     edu_html = ""
-    if "EDUCATION" in sections:
-        edu_text = sections["EDUCATION"].strip()
+    edu_section = _section(sections, "education")
+    if edu_section:
+        edu_text = edu_section.strip()
         edu_text = re.sub(r"\s*\|\s*Bachelor'?s.*", "", edu_text)
-        if gpa:
+        # Strip any inline date range so it doesn't compete with the right-aligned span
+        date_match = _DATE_PATTERN.search(edu_text)
+        if date_match:
+            edu_text = (
+                edu_text[: date_match.start()].rstrip(" |\t") + edu_text[date_match.end():].lstrip()
+            ).rstrip(" |\t")
+            if not (edu_start or edu_end):
+                edu_start = edu_end = date_match.group(0)
+        # Only inject GPA from profile if the education line doesn't already carry one
+        if gpa and "GPA" not in edu_text:
             edu_text = f"{edu_text} | GPA: {gpa}"
         date_span = ""
-        if edu_start and edu_end:
+        if edu_start and edu_end and edu_start != edu_end:
             date_span = f'<span class="date">{edu_start} – {edu_end}</span>'
+        elif edu_start:
+            date_span = f'<span class="date">{edu_start}</span>'
         edu_html = (
             f'<div class="section"><div class="section-title">Education</div>'
             f'<div class="edu">{edu_text}{date_span}</div></div>'
@@ -403,7 +439,7 @@ body {{
     color: #000;
     max-width: 8.5in;
     margin: 0 auto;
-    padding: 0.28in 0.6in;
+    padding: 0.22in 0.6in;
 }}
 .header {{
     text-align: center;
@@ -436,7 +472,7 @@ body {{
     text-decoration: underline;
 }}
 .section {{
-    margin-top: 7pt;
+    margin-top: 5pt;
 }}
 .section-title {{
     font-size: 12pt;
